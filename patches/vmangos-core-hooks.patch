@@ -1,0 +1,88 @@
+diff --git a/src/game/ScriptObjects.h b/src/game/ScriptObjects.h
+--- a/src/game/ScriptObjects.h
++++ b/src/game/ScriptObjects.h
+@@ -570,4 +570,6 @@
+         virtual void OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/) {}
+         virtual void OnCreatureAddWorld(Creature* /*creature*/) {}
+         virtual void OnCreatureRemoveWorld(Creature* /*creature*/) {}
++        virtual void OnCreatureRespawnWorld(Creature* /*creature*/) {}
++        virtual void OnBeforeCreatureGenerateMoneyLoot(Creature* /*creature*/, uint32& /*minimum*/, uint32& /*maximum*/) {}
+         virtual bool CanCreatureGossipHello(Player* /*player*/, Creature* /*creature*/) { return false; }
+diff --git a/src/game/Objects/Creature.cpp b/src/game/Objects/Creature.cpp
+--- a/src/game/Objects/Creature.cpp
++++ b/src/game/Objects/Creature.cpp
+@@ -267,3 +267,10 @@
+     if (!bWasInWorld && m_zoneScript)
+         m_zoneScript->OnCreatureCreate(this);
++    if (!bWasInWorld && IsInWorld())
++    {
++        ScriptRegistry<AllCreatureScript>::ForEach([&](AllCreatureScript* script)
++        {
++            script->OnCreatureAddWorld(this);
++        });
++    }
+ }
+@@ -285,4 +292,9 @@
+     if (IsInWorld())
+     {
++        ScriptRegistry<AllCreatureScript>::ForEach([&](AllCreatureScript* script)
++        {
++            script->OnCreatureRemoveWorld(this);
++        });
++
+         if (AI())
+             AI()->OnRemoveFromWorld();
+@@ -808,9 +823,14 @@
+                 if (GetMap()->IsDungeon())
+                 {
+                     uint32 playerCount = GetMap()->GetPlayersCountExceptGMs();
+                     uint32 maxCount = ((DungeonMap*)GetMap())->GetMaxPlayers();
+                     if (playerCount > 0)
+                         sAutoScaler->ScaleCreature(this, playerCount, maxCount, GetMap());
+                 }
++
++                ScriptRegistry<AllCreatureScript>::ForEach([&](AllCreatureScript* script)
++                {
++                    script->OnCreatureRespawnWorld(this);
++                });
+                 
+                 GetMap()->Add(this);
+diff --git a/src/game/Autoscaling/AutoScaler.hpp b/src/game/Autoscaling/AutoScaler.hpp
+--- a/src/game/Autoscaling/AutoScaler.hpp
++++ b/src/game/Autoscaling/AutoScaler.hpp
+@@ -29,1 +29,1 @@
+-        void GenerateScaledMoneyLoot(Creature* creature, Loot* loot);
++        void ModifyMoneyLoot(Creature* creature, uint32& minimum, uint32& maximum);
+diff --git a/src/game/Autoscaling/AutoScaler.cpp b/src/game/Autoscaling/AutoScaler.cpp
+--- a/src/game/Autoscaling/AutoScaler.cpp
++++ b/src/game/Autoscaling/AutoScaler.cpp
+@@ -169,2 +169,2 @@
+-void AutoScaler::GenerateScaledMoneyLoot(Creature* creature, Loot* loot)
++void AutoScaler::ModifyMoneyLoot(Creature* creature, uint32& minimum, uint32& maximum)
+ {
+@@ -183,3 +183,3 @@
+-    loot->GenerateMoneyLoot(static_cast<uint32>(creature->GetGoldMin() * gold_factor),
+-                            static_cast<uint32>(creature->GetGoldMax() * gold_factor));
++    minimum = static_cast<uint32>(minimum * gold_factor);
++    maximum = static_cast<uint32>(maximum * gold_factor);
+ }
+diff --git a/src/game/Objects/Unit.cpp b/src/game/Objects/Unit.cpp
+--- a/src/game/Objects/Unit.cpp
++++ b/src/game/Objects/Unit.cpp
+@@ -1315,4 +1315,12 @@
+-            if (pCreatureVictim->GetMap()->IsDungeon())
+-                sAutoScaler->GenerateScaledMoneyLoot(pCreatureVictim, loot);
+-            else
+-                loot->GenerateMoneyLoot(pCreatureVictim->GetGoldMin(), pCreatureVictim->GetGoldMax());
++            uint32 minimumGold = pCreatureVictim->GetGoldMin();
++            uint32 maximumGold = pCreatureVictim->GetGoldMax();
++
++            if (pCreatureVictim->GetMap()->IsDungeon())
++                sAutoScaler->ModifyMoneyLoot(pCreatureVictim, minimumGold, maximumGold);
++
++            ScriptRegistry<AllCreatureScript>::ForEach([&](AllCreatureScript* script)
++            {
++                script->OnBeforeCreatureGenerateMoneyLoot(pCreatureVictim, minimumGold, maximumGold);
++            });
++
++            loot->GenerateMoneyLoot(minimumGold, maximumGold);

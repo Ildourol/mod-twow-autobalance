@@ -1,0 +1,332 @@
+﻿#
+# Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
+# Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
+# Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+#
+# AutoBalance Configuration File
+#
+
+[AutoBalance]
+
+###################################################################################################
+# AUTOBALANCE GENERAL SETTINGS
+#
+#    TwowAutoBalance.Enable
+#    AutoBalance.Enable.Global
+#        Description: Enable or disable the AutoBalance module globally.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+TwowAutoBalance.Enable = 0
+AutoBalance.Enable.Global = 0
+
+#
+#    AutoBalance.Enable.5M
+#    AutoBalance.Enable.10M
+#    AutoBalance.Enable.15M
+#    AutoBalance.Enable.20M
+#    AutoBalance.Enable.25M
+#    AutoBalance.Enable.40M
+#    AutoBalance.Enable.OtherNormal
+#        Description: Enable AutoBalance for specific instance sizes.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+AutoBalance.Enable.5M = 1
+AutoBalance.Enable.10M = 1
+AutoBalance.Enable.15M = 1
+AutoBalance.Enable.20M = 1
+AutoBalance.Enable.25M = 1
+AutoBalance.Enable.40M = 1
+AutoBalance.Enable.OtherNormal = 1
+
+#
+#    AutoBalance.Disable.PerInstance
+#        Description: Comma-separated list of Map IDs where AutoBalance will be disabled.
+#        Example:     "33,34"
+#        Default:     ""
+
+AutoBalance.Disable.PerInstance = ""
+
+#
+#    AutoBalance.MinPlayers
+#    AutoBalance.MinPlayers.Raid
+#        Description: Minimum player count baseline assumed for dungeon/raid scaling.
+#        Default:     1
+
+AutoBalance.MinPlayers = 1
+AutoBalance.MinPlayers.Raid = 1
+
+#
+#    AutoBalance.MinPlayers.PerInstance
+#        Description: Custom minimum player count overrides per map ID.
+#        Format:      "mapId:minPlayers,mapId:minPlayers"
+#        Example:     "469:5,409:10"
+#        Default:     ""
+
+AutoBalance.MinPlayers.PerInstance = ""
+
+###################################################################################################
+# INFLECTION POINT & CURVE SETTINGS
+#
+#    The inflection point controls the curvature of the hyperbolic tangent (tanh) scaling function.
+#    - value: The player count center where difficulty scaling changes curvature (default: 0.5)
+#    - CurveFloor: Minimum bound of the scaling curve multiplier (default: 0.0)
+#    - CurveCeiling: Maximum bound of the scaling curve multiplier (default: 1.0)
+#    - BossModifier: Multiplier applied to inflection point value for bosses (default: 1.0)
+
+AutoBalance.InflectionPoint = 0.5
+AutoBalance.InflectionPoint.CurveFloor = 0.0
+AutoBalance.InflectionPoint.CurveCeiling = 1.0
+AutoBalance.InflectionPoint.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid = 0.5
+AutoBalance.InflectionPointRaid.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid10M = 0.5
+AutoBalance.InflectionPointRaid10M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid10M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid10M.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid15M = 0.5
+AutoBalance.InflectionPointRaid15M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid15M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid15M.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid20M = 0.5
+AutoBalance.InflectionPointRaid20M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid20M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid20M.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid25M = 0.5
+AutoBalance.InflectionPointRaid25M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid25M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid25M.BossModifier = 1.0
+
+AutoBalance.InflectionPointRaid40M = 0.5
+AutoBalance.InflectionPointRaid40M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid40M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid40M.BossModifier = 1.0
+
+#
+#    AutoBalance.InflectionPoint.PerInstance
+#    AutoBalance.InflectionPoint.Boss.PerInstance
+#        Description: Per-map inflection point overrides.
+#        Format:      "mapId:value:floor:ceiling:bossMod,..."
+#        Default:     ""
+
+AutoBalance.InflectionPoint.PerInstance = ""
+AutoBalance.InflectionPoint.Boss.PerInstance = ""
+
+###################################################################################################
+# STAT MODIFIERS
+#
+#    Multipliers applied on top of the calculated inflection curve multiplier.
+#    - Global: Multiplier applied to all stats
+#    - Health, Mana, Armor, Damage: Specific stat multipliers
+#    - CCDuration: Crowd control duration multiplier
+
+AutoBalance.StatModifier.Global = 1.0
+AutoBalance.StatModifier.Health = 1.0
+AutoBalance.StatModifier.Mana = 1.0
+AutoBalance.StatModifier.Armor = 1.0
+AutoBalance.StatModifier.Damage = 1.0
+AutoBalance.StatModifier.CCDuration = 1.0
+
+AutoBalance.StatModifier.Boss.Global = 1.0
+AutoBalance.StatModifier.Boss.Health = 1.0
+AutoBalance.StatModifier.Boss.Mana = 1.0
+AutoBalance.StatModifier.Boss.Armor = 1.0
+AutoBalance.StatModifier.Boss.Damage = 1.0
+AutoBalance.StatModifier.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid.Global = 1.0
+AutoBalance.StatModifierRaid.Health = 1.0
+AutoBalance.StatModifierRaid.Mana = 1.0
+AutoBalance.StatModifierRaid.Armor = 1.0
+AutoBalance.StatModifierRaid.Damage = 1.0
+AutoBalance.StatModifierRaid.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid.Boss.Global = 1.0
+AutoBalance.StatModifierRaid.Boss.Health = 1.0
+AutoBalance.StatModifierRaid.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid10M.Global = 1.0
+AutoBalance.StatModifierRaid10M.Health = 1.0
+AutoBalance.StatModifierRaid10M.Mana = 1.0
+AutoBalance.StatModifierRaid10M.Armor = 1.0
+AutoBalance.StatModifierRaid10M.Damage = 1.0
+AutoBalance.StatModifierRaid10M.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid10M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid10M.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid20M.Global = 1.0
+AutoBalance.StatModifierRaid20M.Health = 1.0
+AutoBalance.StatModifierRaid20M.Mana = 1.0
+AutoBalance.StatModifierRaid20M.Armor = 1.0
+AutoBalance.StatModifierRaid20M.Damage = 1.0
+AutoBalance.StatModifierRaid20M.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid20M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid20M.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid40M.Global = 1.0
+AutoBalance.StatModifierRaid40M.Health = 1.0
+AutoBalance.StatModifierRaid40M.Mana = 1.0
+AutoBalance.StatModifierRaid40M.Armor = 1.0
+AutoBalance.StatModifierRaid40M.Damage = 1.0
+AutoBalance.StatModifierRaid40M.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid40M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid40M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid40M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid40M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid40M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid40M.Boss.CCDuration = 1.0
+
+#
+#    AutoBalance.StatModifier.PerInstance
+#    AutoBalance.StatModifier.Boss.PerInstance
+#    AutoBalance.StatModifier.PerCreature
+#        Description: Per-instance and per-creature stat modifier overrides.
+#        Format:      "id:global:health:mana:armor:damage:ccduration,..."
+#        Default:     ""
+
+AutoBalance.StatModifier.PerInstance = ""
+AutoBalance.StatModifier.Boss.PerInstance = ""
+AutoBalance.StatModifier.PerCreature = ""
+
+###################################################################################################
+# STAT MULTIPLIER CLAMP LIMITS
+#
+#    Hard lower/upper bounds for calculated multipliers.
+
+AutoBalance.MinHPModifier = 0.01
+AutoBalance.MinManaModifier = 0.01
+AutoBalance.MinDamageModifier = 0.01
+AutoBalance.MinCCDurationModifier = 0.25
+AutoBalance.MaxCCDurationModifier = 1.0
+
+###################################################################################################
+# DIFFICULTY OFFSET & FORCED CREATURE COUNTS
+#
+#    AutoBalance.playerCountDifficultyOffset
+#        Description: Artificial offset added to the player count before calculating multipliers.
+#                     Positive values increase difficulty, negative values reduce it.
+#        Default:     0
+
+AutoBalance.playerCountDifficultyOffset = 0
+
+#
+#    AutoBalance.ForcedID*
+#        Description: Comma-separated list of creature template IDs forced to scale as if
+#                     there were N players.
+#        Default:     ""
+
+AutoBalance.ForcedID40 = ""
+AutoBalance.ForcedID20 = ""
+AutoBalance.ForcedID10 = ""
+AutoBalance.ForcedID5 = ""
+AutoBalance.ForcedID2 = ""
+
+#
+#    AutoBalance.DisabledID
+#        Description: Comma-separated list of creature template IDs completely excluded from AutoBalance.
+#        Default:     ""
+
+AutoBalance.DisabledID = ""
+
+###################################################################################################
+# DYNAMIC LEVEL SCALING
+#
+#    AutoBalance.LevelScaling
+#        Description: Enable level scaling of dungeon creatures to match player levels.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+AutoBalance.LevelScaling = 0
+
+#
+#    AutoBalance.LevelScaling.Method
+#        Description: Method used to scale creature levels.
+#                     "dynamic" - Relative level offset maintained vs highest player level
+#                     "fixed"   - Directly sets creature level to player level
+#        Default:     "dynamic"
+
+AutoBalance.LevelScaling.Method = "dynamic"
+
+# Creatures within these many levels above/below the highest-level player keep
+# their native level. Creatures outside the window are level-scaled.
+AutoBalance.LevelScaling.SkipHigherLevels = 3
+AutoBalance.LevelScaling.SkipLowerLevels = 5
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.Dungeons = 1
+AutoBalance.LevelScaling.DynamicLevel.Floor.Dungeons = 5
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.Raids = 3
+AutoBalance.LevelScaling.DynamicLevel.Floor.Raids = 5
+
+# Per-instance format:
+# "mapId:skipHigher:skipLower:ceiling:floor,mapId:skipHigher:skipLower:ceiling:floor"
+AutoBalance.LevelScaling.DynamicLevel.PerInstance = ""
+
+###################################################################################################
+# REWARD SCALING (XP & MONEY)
+#
+#    AutoBalance.RewardScaling.Method
+#        Description: "dynamic" scales rewards proportionally with player count;
+#                     "fixed" uses flat reward multipliers.
+#        Default:     "dynamic"
+
+AutoBalance.RewardScaling.Method = "dynamic"
+
+AutoBalance.RewardScaling.XP = 1
+AutoBalance.RewardScaling.XP.Modifier = 1.0
+
+AutoBalance.RewardScaling.Money = 1
+AutoBalance.RewardScaling.Money.Modifier = 1.0
+
+###################################################################################################
+# NOTIFICATIONS & DIAGNOSTICS
+#
+#    AutoBalance.PlayerChangeNotify
+#        Description: Notify players in the instance when difficulty adapts due to party changes.
+#        Default:     1 - (Enabled)
+
+AutoBalance.PlayerChangeNotify = 1
+
+#
+#    AutoBalanceAnnounce.enable
+#        Description: Announce on player login that the module is active.
+#        Default:     1 - (Enabled)
+
+AutoBalanceAnnounce.enable = 1
+
+#
+#    AutoBalance.DebugLog
+#        Description: Detailed debug output in server console/log.
+#        Default:     0 - (Disabled)
+
+AutoBalance.DebugLog = 0
+
+###################################################################################################
+# COEXISTENCE PROTECTION
+#
+#    AutoBalance.Coexistence.DisableCoreAutoScaler
+#        Description: When mod-twow-autobalance is enabled, automatically deactivate the core
+#                     AutoScaler engine to prevent any double-scaling or stat conflicts.
+#        Default:     1 - (Enabled, recommended)
+
+AutoBalance.Coexistence.DisableCoreAutoScaler = 1
