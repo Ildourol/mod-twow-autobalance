@@ -19,7 +19,137 @@ Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** modu
 
 ---
 
-## 2. Mathematical Methodology
+## 2. Installation
+
+The module must be installed inside the TortoiseWoW source tree **before configuring/building the core**.
+
+### 2.1 Clone the module
+
+From the root of your TortoiseWoW source tree:
+
+```bash
+cd /path/to/tortoise-wow
+mkdir -p modules
+
+git clone https://github.com/Ildourol/mod-twow-autobalance.git modules/mod-twow-autobalance
+```
+
+Your source tree should then contain:
+
+```text
+tortoise-wow/
+├── modules/
+│   └── mod-twow-autobalance/
+├── src/
+└── ...
+```
+
+### 2.2 Apply the required vMaNGOS/TortoiseWoW core hooks
+
+`mod-twow-autobalance` requires several small core integration hooks for creature lifecycle handling and money-loot scaling.
+
+From the **TortoiseWoW source-tree root**, first check whether the supplied patch applies cleanly:
+
+```bash
+git apply --check modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
+```
+
+If the command prints no errors, apply it:
+
+```bash
+git apply modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
+```
+
+You can inspect the resulting core changes with:
+
+```bash
+git diff
+```
+
+#### Shyalya/tortoise-wow users
+
+The current `Shyalya/tortoise-wow` tree already contains the `OnCreatureAddWorld` and `OnCreatureRemoveWorld` callback wiring, but it may not contain all of the additional hooks required by this module. Because of that, the complete patch can report overlapping hunks.
+
+If `git apply --check` fails, use:
+
+```bash
+git apply --reject modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
+```
+
+Then list any rejected hunks:
+
+```bash
+find . -name "*.rej"
+```
+
+Do **not** add duplicate `OnCreatureAddWorld` or `OnCreatureRemoveWorld` calls if your core already contains them. The important final integration is that the core provides:
+
+- `OnCreatureRemoveWorld` notification;
+- `OnCreatureRespawnWorld` notification after the creature's base level/stats are selected;
+- `OnBeforeCreatureGenerateMoneyLoot` before the core calls `GenerateMoneyLoot`;
+- `AutoScaler::ModifyMoneyLoot(...)`, so the legacy core scaler modifies the money range instead of generating money independently.
+
+These hooks allow `mod-twow-autobalance` and the legacy TortoiseWoW `AutoScaler` to coexist without double-scaling.
+
+### 2.3 Configure the module
+
+Copy the distributed configuration file:
+
+```bash
+cp modules/mod-twow-autobalance/mod-twow-autobalance.conf.dist \
+   modules/mod-twow-autobalance/mod-twow-autobalance.conf
+```
+
+At minimum, enable the module with:
+
+```ini
+TwowAutoBalance.Enable = 1
+```
+
+`AutoBalance.Enable.Global = 1` is also accepted as a compatibility alias.
+
+### 2.4 Configure and build TortoiseWoW
+
+After the module and core patch are in place, configure and build TortoiseWoW using your normal build procedure. If you already configured CMake before adding the module, re-run CMake so the module is discovered.
+
+For example, if you use an out-of-source build directory:
+
+```bash
+cd /path/to/tortoise-wow
+mkdir -p build
+cd build
+
+cmake .. <your normal TortoiseWoW CMake options>
+cmake --build . -j$(nproc)
+```
+
+Use the same CMake options and installation paths that you normally use for your TortoiseWoW server.
+
+### 2.5 Verify the installation
+
+After starting the world server, use:
+
+```text
+.ab info
+```
+
+or:
+
+```text
+.autobalance info
+```
+
+to verify that `mod-twow-autobalance` is loaded and enabled.
+
+It is recommended to make a Git branch before modifying the core so the integration can be reverted easily:
+
+```bash
+git checkout -b twow-autobalance
+```
+
+---
+
+## 3. Mathematical Methodology
 
 ### Inflection Point & Sigmoid Multiplier Formula
 
@@ -45,7 +175,7 @@ Each creature stat (Health, Mana, Armor, Damage, CC Duration) is computed from i
 
 ---
 
-## 3. Architecture & TortoiseWoW Seams
+## 4. Architecture & TortoiseWoW Seams
 
 | Component | Description |
 |---|---|
@@ -58,7 +188,7 @@ Each creature stat (Health, Mana, Armor, Damage, CC Duration) is computed from i
 
 ---
 
-## 4. Chat Commands
+## 5. Chat Commands
 
 All commands can be invoked via `.ab` or `.autobalance`:
 
@@ -71,7 +201,7 @@ All commands can be invoked via `.ab` or `.autobalance`:
 
 ---
 
-## 5. Coexistence with Core AutoScaler
+## 6. Coexistence with Core AutoScaler
 
 TortoiseWoW includes a legacy `AutoScaler` implementation in `src/game/Autoscaling`.
 `mod-twow-autobalance` enforces **strict mutual exclusion**:
@@ -90,7 +220,7 @@ For a core tree that does not already contain these seams, apply
 
 ---
 
-## 6. Configuration Reference
+## 7. Configuration Reference
 
 Copy `mod-twow-autobalance.conf.dist` to your `modules/` or server configuration folder as `mod-twow-autobalance.conf`.
 
@@ -104,7 +234,7 @@ Key settings:
 
 ---
 
-## 7. License & Credits
+## 8. License & Credits
 
 - Ported to TortoiseWoW / Turtle WoW by Antigravity (Google DeepMind).
 - Original AzerothCore mod-autobalance authors: **VAS**, **CVMagic**, and the **AzerothCore Community**.
