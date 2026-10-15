@@ -1,10 +1,10 @@
-﻿/*
+/*
  * Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
  * Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
  * Copyright (C) 2008-2010 TrinityCore <http://www.trinitycore.org/>
  * Copyright (C) 2006-2009 ScriptDev2 <https://scriptdev2.svn.sourceforge.net/>
  * Copyright (C) 1985-2010 KalCorp <http://vasserver.dyndns.org/>
- * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+ * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
  */
 
 #ifndef MOD_TWOW_AUTOBALANCE_H
@@ -13,14 +13,19 @@
 #include "Common.h"
 #include "ObjectGuid.h"
 #include "SharedDefines.h"
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+class Creature;
+class Player;
 
 enum ScalingMethod
 {
@@ -136,7 +141,12 @@ struct AutoBalanceCreatureInfo
     bool       wasAliveNowDead        = false;
     bool       neverLevelScale        = false;
     bool       isBoss                 = false;
+    bool       isInCreatureList       = false;
     Relevance  relevance              = AUTOBALANCE_RELEVANCE_UNCHECKED;
+
+    Creature*   summoner              = nullptr;
+    std::string summonerName;
+    uint8       summonerLevel         = 0;
 
     CreatureBaseData baseData;
 };
@@ -170,7 +180,7 @@ struct AutoBalanceMapInfo
     bool       pendingRescale                 = false;
     uint8      combatLockMinPlayers           = 0;
 
-    bool       isLevelScalingEnabled          = false;
+    bool       isLevelScalingEnabled          = true;
     uint8      levelScalingSkipHigherLevels   = 3;
     uint8      levelScalingSkipLowerLevels    = 5;
     uint8      levelScalingDynamicCeiling     = 1;
@@ -182,5 +192,11 @@ struct AutoBalanceMapInfo
     std::set<ObjectGuid> players;
     std::set<ObjectGuid> creatures;
 };
+
+inline uint64_t GetCurrentAutoBalanceConfigTime()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
 #endif // MOD_TWOW_AUTOBALANCE_H

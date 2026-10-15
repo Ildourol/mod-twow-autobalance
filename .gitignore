@@ -1,0 +1,13 @@
+# Documentation and internal planning files
+docs/
+AGENTS.md
+tests/
+
+# Build artifacts and IDE files
+build/
+bin/
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/

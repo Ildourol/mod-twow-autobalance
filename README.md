@@ -1,6 +1,8 @@
-﻿# mod-twow-autobalance for TortoiseWoW / Turtle WoW
+# mod-twow-autobalance for TortoiseWoW / Turtle WoW
 
-Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** module, adapted for **TortoiseWoW** and **Turtle WoW**.
+![mod-twow-autobalance](mod-twow-autobalance.jpg)
+
+Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** module, adapted for **TortoiseWoW** and **Turtle WoW** (client 1.18.1.7272).
 
 ---
 
@@ -9,95 +11,56 @@ Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** modu
 `mod-twow-autobalance` dynamically adjusts dungeon and raid encounter difficulty based on the number and levels of active players inside an instance. It allows small groups (or even solo players with or without PlayerBots) to experience group content with smoothly scaled health, mana, armor, damage, and crowd-control mechanics while maintaining the intended boss encounter pacing.
 
 ### Key Highlights
-- **Smooth Hyperbolic Tangent (tanh) Scaling**: Replaces simplistic linear multipliers with smooth sigmoid curves parameterized by inflection points, floor, ceiling, and boss modifiers.
+- **100% Non-Intrusive (The Unediting Doctrine)**: Zero patches to `tortoise-wow` or `TortoiseBots`. All hooks use native virtual script hooks (`UnitScript`, `PlayerScript`, `AllMapScript`).
+- **Smooth Hyperbolic Tangent (tanh) Scaling**: Smooth sigmoid curves parameterized by inflection points, floor, ceiling, and boss modifiers (1:1 parity with upstream WotLK).
 - **Dynamic & Fixed Level Scaling**: Scales creature levels, health, mana, and damage relative to the highest player level in the party.
+- **Multi-Wing Distance Proximity**: Distance-checked creature activation for multi-wing dungeons such as Scarlet Monastery (Map 189).
+- **Summons & Clones Hierarchy**: Full boss summon, temporary summon unwrapping, and trigger NPC filtering.
 - **Separate Boss Tuning**: Custom modifiers and curves for dungeon bosses vs trash mobs.
 - **Combat Locking**: Prevents player count exploits during active boss encounters.
-- **Reward Scaling**: Configurable XP and money drop scaling based on effective group size.
-- **PlayerBots Compatibility**: Seamlessly integrates with TortoiseWoW / cmangos PlayerBots.
-- **Coexistence Protection**: Zero double-scaling when both core `AutoScaler` and `mod-twow-autobalance` are present.
+- **Reward Scaling**: Configurable XP and money drop scaling based on effective group size with native money loot hooks.
+- **PlayerBots (`TortoiseBots`) Compatibility**: Configurable bot difficulty weighting (`AutoBalance.CountBots`, `AutoBalance.BotWeight`) and automatic suppression of chat sysmessages to headless bot sessions.
+- **High-Performance Concurrency**: Reader-writer `std::shared_mutex` for hot combat paths and $O(1)$ amortized lazy timestamp-based creature rescaling.
+- **Cross-Platform**: Fully compatible with Linux (Ubuntu 22.04 / 24.04 LTS) and Windows.
 
 ---
 
 ## 2. Installation
 
-The module must be installed inside the TortoiseWoW source tree **before configuring/building the core**.
+Under **The Unediting Doctrine**, no core modifications or git patches are required.
 
-### 2.1 Clone the module
+### 2.1 Clone or Link the Module
 
-From the root of your TortoiseWoW source tree:
+Place the module inside the `modules` directory of your TortoiseWoW tree:
 
 ```bash
-cd /path/to/tortoise-wow
-mkdir -p modules
-
-git clone https://github.com/Ildourol/mod-twow-autobalance.git modules/mod-twow-autobalance
+cd /path/to/tortoise-wow/modules
+git clone https://github.com/Ildourol/mod-twow-autobalance.git mod-twow-autobalance
 ```
 
-Your source tree should then contain:
+Your source tree structure:
 
 ```text
 tortoise-wow/
 ├── modules/
 │   └── mod-twow-autobalance/
-├── src/
-└── ...
+│       ├── conf/
+│       │   └── mod-twow-autobalance.conf.dist
+│       ├── data/
+│       │   └── sql/world/
+│       ├── src/
+│       ├── mod-twow-autobalance.cmake
+│       ├── mod-twow-autobalance.jpg
+│       └── README.md
 ```
 
-### 2.2 Apply the required vMaNGOS/TortoiseWoW core hooks
-
-`mod-twow-autobalance` requires several small core integration hooks for creature lifecycle handling and money-loot scaling.
-
-From the **TortoiseWoW source-tree root**, first check whether the supplied patch applies cleanly:
-
-```bash
-git apply --check modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
-```
-
-If the command prints no errors, apply it:
-
-```bash
-git apply modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
-```
-
-You can inspect the resulting core changes with:
-
-```bash
-git diff
-```
-
-#### Shyalya/tortoise-wow users
-
-The current `Shyalya/tortoise-wow` tree already contains the `OnCreatureAddWorld` and `OnCreatureRemoveWorld` callback wiring, but it may not contain all of the additional hooks required by this module. Because of that, the complete patch can report overlapping hunks.
-
-If `git apply --check` fails, use:
-
-```bash
-git apply --reject modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch
-```
-
-Then list any rejected hunks:
-
-```bash
-find . -name "*.rej"
-```
-
-Do **not** add duplicate `OnCreatureAddWorld` or `OnCreatureRemoveWorld` calls if your core already contains them. The important final integration is that the core provides:
-
-- `OnCreatureRemoveWorld` notification;
-- `OnCreatureRespawnWorld` notification after the creature's base level/stats are selected;
-- `OnBeforeCreatureGenerateMoneyLoot` before the core calls `GenerateMoneyLoot`;
-- `AutoScaler::ModifyMoneyLoot(...)`, so the legacy core scaler modifies the money range instead of generating money independently.
-
-These hooks allow `mod-twow-autobalance` and the legacy TortoiseWoW `AutoScaler` to coexist without double-scaling.
-
-### 2.3 Configure the module
+### 2.2 Configure the Module
 
 Copy the distributed configuration file:
 
 ```bash
-cp modules/mod-twow-autobalance/mod-twow-autobalance.conf.dist \
-   modules/mod-twow-autobalance/mod-twow-autobalance.conf
+cp modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf.dist \
+   modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf
 ```
 
 At minimum, enable the module with:
@@ -106,28 +69,33 @@ At minimum, enable the module with:
 TwowAutoBalance.Enable = 1
 ```
 
-`AutoBalance.Enable.Global = 1` is also accepted as a compatibility alias.
+(`AutoBalance.Enable.Global = 1` is also accepted as an alias).
 
-### 2.4 Configure and build TortoiseWoW
+### 2.3 Configure and Build TortoiseWoW
 
-After the module and core patch are in place, configure and build TortoiseWoW using your normal build procedure. If you already configured CMake before adding the module, re-run CMake so the module is discovered.
-
-For example, if you use an out-of-source build directory:
+**Linux / Ubuntu 22.04 & 24.04 LTS:**
 
 ```bash
-cd /path/to/tortoise-wow
-mkdir -p build
-cd build
+# Install dependencies
+sudo apt update && sudo apt install -y build-essential cmake git libace-dev libmysqlclient-dev libssl-dev libbz2-dev zlib1g-dev
 
-cmake .. <your normal TortoiseWoW CMake options>
-cmake --build . -j$(nproc)
+cd /path/to/tortoise-wow
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DMODULE_MOD_TWOW_AUTOBALANCE=static
+cmake --build . --target mangosd -j$(nproc)
 ```
 
-Use the same CMake options and installation paths that you normally use for your TortoiseWoW server.
+**Windows (Visual Studio 2022):**
 
-### 2.5 Verify the installation
+```powershell
+cd C:\path\to\tortoise-wow
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMODULE_MOD_TWOW_AUTOBALANCE=static
+cmake --build build --config Release --target mangosd --parallel
+```
 
-After starting the world server, use:
+### 2.4 Verify the Installation
+
+After starting `mangosd`, use:
 
 ```text
 .ab info
@@ -139,13 +107,7 @@ or:
 .autobalance info
 ```
 
-to verify that `mod-twow-autobalance` is loaded and enabled.
-
-It is recommended to make a Git branch before modifying the core so the integration can be reverted easily:
-
-```bash
-git checkout -b twow-autobalance
-```
+to verify that `mod-twow-autobalance` is loaded and active.
 
 ---
 
@@ -175,16 +137,16 @@ Each creature stat (Health, Mana, Armor, Damage, CC Duration) is computed from i
 
 ---
 
-## 4. Architecture & TortoiseWoW Seams
+## 4. Architecture & Non-Intrusive Hooks
 
-| Component | Description |
-|---|---|
-| `AutoBalance.h` | Core enums, structures, and data models. |
-| `AutoBalanceConfig` | Configuration parser for `sConfig` options and per-instance overrides. |
-| `AutoBalanceScaling` | Core mathematical engine for sigmoid inflection, level calculations, and base stat application. |
-| `AutoBalanceManager` | Central lifecycle manager tracking map states, active creatures, and combat locks without memory leaks. |
-| `AutoBalanceScripts` | Native `WorldScript`, `PlayerScript`, `UnitScript`, `AllMapScript`, and `AllCreatureScript` hooks. |
-| `AutoBalanceCommands` | Chat command handler implementing `.ab` / `.autobalance` subcommands. |
+| Component | Role | Hook Technique |
+|---|---|---|
+| `AutoBalance.h` | Core data models & structs | Shared structs, memory-safe lifetime |
+| `AutoBalanceConfig` | Configuration parser | Supports whitespace & legacy colon delimiters, `-1` inheritance |
+| `AutoBalanceScaling` | Mathematical scaling engine | Sigmoid inflection, level calculations, summons & distance checks |
+| `AutoBalanceManager` | Central state registry | `std::shared_mutex` concurrency, $O(1)$ lazy rescaling |
+| `AutoBalanceScripts` | Engine integration | `UnitScript::OnUnitUpdate` (lazy registration), `PlayerScript::OnMoneyChanged`, `AllMapScript` |
+| `AutoBalanceCommands` | GM commands | `.ab` / `.autobalance` subcommands |
 
 ---
 
@@ -201,40 +163,16 @@ All commands can be invoked via `.ab` or `.autobalance`:
 
 ---
 
-## 6. Coexistence with Core AutoScaler
+## 6. PlayerBots (`TortoiseBots`) Interoperability
 
-TortoiseWoW includes a legacy `AutoScaler` implementation in `src/game/Autoscaling`.
-`mod-twow-autobalance` enforces **strict mutual exclusion**:
-- When `TwowAutoBalance.Enable = 1` or `AutoBalance.Enable.Global = 1`, core `AutoScaler` automatically yields execution.
-- When `mod-twow-autobalance` is disabled, core `AutoScaler` operates normally according to `AutoScalerEnable`.
-- **Zero double-scaling** occurs under any configuration combination.
-
-The vMaNGOS/TortoiseWoW core integration also supplies three lifecycle seams used by this module:
-
-- creature removal notification, so tracked state is released safely;
-- creature respawn notification after `SelectLevel`, so base stats are captured again;
-- a pre-money-generation hook, so either scaler can modify gold while the core always generates the loot.
-
-For a core tree that does not already contain these seams, apply
-`modules/mod-twow-autobalance/patches/vmangos-core-hooks.patch` from the source-tree root before building.
+When running with `TortoiseBots`:
+- Bots with headless sessions (`session->IsHeadless()`) are recognized automatically.
+- Server operators can configure `AutoBalance.CountBots = 1` and `AutoBalance.BotWeight = 1.0` (or fractional values such as `0.8`).
+- Headless bot sessions are automatically filtered out from chat announcements, avoiding packet allocation overhead.
 
 ---
 
-## 7. Configuration Reference
-
-Copy `mod-twow-autobalance.conf.dist` to your `modules/` or server configuration folder as `mod-twow-autobalance.conf`.
-
-Key settings:
-- `TwowAutoBalance.Enable`: Master enable/disable (0 = Disabled, 1 = Enabled). `AutoBalance.Enable.Global` is a compatibility alias; enabling either one has the same effect.
-- `AutoBalance.MinPlayers`: Minimum player assumption for 5-man dungeons.
-- `AutoBalance.MinPlayers.Raid`: Minimum player assumption for raid dungeons.
-- `AutoBalance.LevelScaling`: Enable/disable dynamic level scaling (0/1).
-- `AutoBalance.PlayerChangeNotify`: In-game chat broadcast when party size changes difficulty.
-- `AutoBalance.Coexistence.DisableCoreAutoScaler`: Protects against double-scaling.
-
----
-
-## 8. License & Credits
+## 7. License & Credits
 
 - Ported to TortoiseWoW / Turtle WoW by Antigravity (Google DeepMind).
 - Original AzerothCore mod-autobalance authors: **VAS**, **CVMagic**, and the **AzerothCore Community**.

@@ -1,7 +1,7 @@
-﻿/*
+/*
  * Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
  * Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
- * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+ * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
  */
 
 #ifndef MOD_TWOW_AUTOBALANCE_SCRIPTS_H
@@ -24,6 +24,8 @@ public:
     void OnLogin(Player* player) override;
     void OnLevelChanged(Player* player, uint8 oldLevel) override;
     void OnGiveXP(Player* player, uint32& amount, Unit* victim) override;
+    void OnMoneyChanged(Player* player, int32& amount) override;
+    void OnCreatureKill(Player* killer, Creature* killed) override;
 };
 
 class AutoBalanceUnitScript : public UnitScript
@@ -36,6 +38,8 @@ public:
     void OnAuraApply(Unit* unit, Aura* aura) override;
     void OnUnitEnterCombat(Unit* unit, Unit* victim) override;
     void OnUnitExitCombat(Unit* unit) override;
+    void OnUnitUpdate(Unit* unit, uint32 diff) override;
+    void OnUnitDeath(Unit* unit, Unit* killer) override;
 };
 
 class AutoBalanceAllMapScript : public AllMapScript
@@ -46,16 +50,6 @@ public:
     void OnPlayerLeaveAll(Map* map, Player* player) override;
     void OnDestroyMap(Map* map) override;
     void OnMapUpdate(Map* map, uint32 diff) override;
-};
-
-class AutoBalanceAllCreatureScript : public AllCreatureScript
-{
-public:
-    AutoBalanceAllCreatureScript();
-    void OnCreatureAddWorld(Creature* creature) override;
-    void OnCreatureRemoveWorld(Creature* creature) override;
-    void OnCreatureRespawnWorld(Creature* creature) override;
-    void OnBeforeCreatureGenerateMoneyLoot(Creature* creature, uint32& minimum, uint32& maximum) override;
 };
 
 #endif // MOD_TWOW_AUTOBALANCE_SCRIPTS_H

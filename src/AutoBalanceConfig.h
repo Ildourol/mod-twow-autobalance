@@ -1,7 +1,7 @@
-﻿/*
+/*
  * Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
  * Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
- * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+ * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
  */
 
 #ifndef MOD_TWOW_AUTOBALANCE_CONFIG_H
@@ -29,9 +29,17 @@ public:
     bool Is20MEnabled() const { return m_enable20M; }
     bool Is25MEnabled() const { return m_enable25M; }
     bool Is40MEnabled() const { return m_enable40M; }
+    bool Is60MEnabled() const { return m_enable60M; }
     bool IsOtherNormalEnabled() const { return m_enableOtherNormal; }
 
     bool IsDungeonDisabled(uint32 mapId) const;
+
+    // In-Memory Player Limits (Zero-SQL) & Raid-in-Dungeon Scaling
+    uint32 GetDungeonPlayerLimitMin() const { return m_playerLimitDungeonsMin; }
+    uint32 GetDungeonPlayerLimitMax() const { return m_playerLimitDungeonsMax; }
+    uint32 GetRaidPlayerLimitMin() const { return m_playerLimitRaidsMin; }
+    uint32 GetRaidPlayerLimitMax() const { return m_playerLimitRaidsMax; }
+    bool IsRaidScalingInDungeonsEnabled() const { return m_raidScalingInDungeons; }
 
     // Minimum Players
     uint8 GetMinPlayersNormal() const { return m_minPlayersNormal; }
@@ -74,6 +82,10 @@ public:
     uint8 GetDynamicLevelFloor(bool isRaid) const { return isRaid ? m_dynamicFloorRaids : m_dynamicFloorDungeons; }
     AutoBalanceDynamicLevelSettings const* GetDynamicLevelOverride(uint32 mapId) const;
 
+    // Distance Check Overrides (e.g. Scarlet Monastery Map 189)
+    bool HasDistanceCheckOverride(uint32 mapId) const;
+    uint32 GetDistanceCheckOverride(uint32 mapId) const;
+
     // Reward Scaling
     ScalingMethod GetRewardScalingMethod() const { return m_rewardScalingMethod; }
     bool IsRewardScalingXPEnabled() const { return m_rewardScalingXP; }
@@ -81,10 +93,28 @@ public:
     bool IsRewardScalingMoneyEnabled() const { return m_rewardScalingMoney; }
     float GetRewardScalingMoneyModifier() const { return m_rewardScalingMoneyModifier; }
 
+    // Boss Kill Encounter Reward System (experimental)
+    bool IsRewardSystemEnabled() const { return m_rewardEnable; }
+    uint32 GetRewardRaidToken() const { return m_rewardRaidToken; }
+    uint32 GetRewardDungeonToken() const { return m_rewardDungeonToken; }
+    uint8 GetMinPlayerReward() const { return m_minPlayerReward; }
+
     // Notification & Announcements
     bool IsPlayerChangeNotifyEnabled() const { return m_playerChangeNotify; }
     bool IsAnnouncementEnabled() const { return m_announcement; }
     bool IsDebugLoggingEnabled() const { return m_debugLogging; }
+
+    // Game Master Scaling Configuration
+    bool IsCountGameMastersEnabled() const { return m_countGameMasters; }
+
+    // PlayerBots (TortoiseBots) Integration
+    bool IsCountBotsEnabled() const { return m_countBots; }
+    float GetBotWeight() const { return m_botWeight; }
+
+    // Exceptions & Special Entity Tracking
+    bool IsNotAClone(uint32 entry) const;
+    bool IsSpellToNeverModify(uint32 spellId) const;
+    bool IsSpellThatSpendsPlayerHealth(uint32 spellId) const;
 
     // Coexistence
     bool IsCoexistenceDisableCoreAutoScaler() const { return m_coexistenceDisableCoreAutoScaler; }
@@ -95,12 +125,14 @@ private:
     AutoBalanceConfig() = default;
 
     static std::vector<std::string> Tokenize(std::string const& str, char delimiter);
+    static std::vector<std::string> SplitWhitespaceOrColon(std::string const& str);
     static void ParseIdList(std::string const& str, std::unordered_set<uint32>& outSet);
     static void ParseForcedIdList(std::string const& str, int count, std::unordered_map<uint32, int>& outMap);
     static void ParseMinPlayersList(std::string const& str, std::unordered_map<uint32, uint8>& outMap);
     static void ParseInflectionOverrides(std::string const& str, std::unordered_map<uint32, AutoBalanceInflectionPointSettings>& outMap);
     static void ParseStatModifierOverrides(std::string const& str, std::unordered_map<uint32, AutoBalanceStatModifiers>& outMap);
     static void ParseDynamicLevelOverrides(std::string const& str, std::unordered_map<uint32, AutoBalanceDynamicLevelSettings>& outMap);
+    static void ParseDistanceCheckOverrides(std::string const& str, std::unordered_map<uint32, uint32>& outMap);
 
     bool m_enableGlobal = false;
     bool m_enable5M = true;
@@ -109,7 +141,14 @@ private:
     bool m_enable20M = true;
     bool m_enable25M = true;
     bool m_enable40M = true;
+    bool m_enable60M = true;
     bool m_enableOtherNormal = true;
+
+    uint32 m_playerLimitDungeonsMin = 1;
+    uint32 m_playerLimitDungeonsMax = 60;
+    uint32 m_playerLimitRaidsMin = 1;
+    uint32 m_playerLimitRaidsMax = 60;
+    bool m_raidScalingInDungeons = true;
 
     std::unordered_set<uint32> m_disabledDungeonIds;
 
@@ -124,6 +163,7 @@ private:
     AutoBalanceInflectionPointSettings m_raid20MInflection;
     AutoBalanceInflectionPointSettings m_raid25MInflection;
     AutoBalanceInflectionPointSettings m_raid40MInflection;
+    AutoBalanceInflectionPointSettings m_raid60MInflection;
     std::unordered_map<uint32, AutoBalanceInflectionPointSettings> m_mapInflectionOverrides;
     std::unordered_map<uint32, AutoBalanceInflectionPointSettings> m_bossMapInflectionOverrides;
 
@@ -133,10 +173,12 @@ private:
     AutoBalanceStatModifiers m_raid10MStatModifiers;
     AutoBalanceStatModifiers m_raid20MStatModifiers;
     AutoBalanceStatModifiers m_raid40MStatModifiers;
+    AutoBalanceStatModifiers m_raid60MStatModifiers;
     AutoBalanceStatModifiers m_raidBossStatModifiers;
     AutoBalanceStatModifiers m_raid10MBossStatModifiers;
     AutoBalanceStatModifiers m_raid20MBossStatModifiers;
     AutoBalanceStatModifiers m_raid40MBossStatModifiers;
+    AutoBalanceStatModifiers m_raid60MBossStatModifiers;
     std::unordered_map<uint32, AutoBalanceStatModifiers> m_mapStatModifierOverrides;
     std::unordered_map<uint32, AutoBalanceStatModifiers> m_mapBossStatModifierOverrides;
     std::unordered_map<uint32, AutoBalanceStatModifiers> m_creatureStatModifierOverrides;
@@ -152,7 +194,7 @@ private:
     std::unordered_map<uint32, int> m_forcedCreatureCounts;
     std::unordered_set<uint32> m_disabledCreatureIds;
 
-    bool m_levelScaling = false;
+    bool m_levelScaling = true;
     ScalingMethod m_levelScalingMethod = AUTOBALANCE_SCALING_DYNAMIC;
     uint8 m_levelScalingSkipHigherLevels = 3;
     uint8 m_levelScalingSkipLowerLevels = 5;
@@ -161,6 +203,7 @@ private:
     uint8 m_dynamicCeilingRaids = 3;
     uint8 m_dynamicFloorRaids = 5;
     std::unordered_map<uint32, AutoBalanceDynamicLevelSettings> m_dynamicLevelOverrides;
+    std::unordered_map<uint32, uint32> m_distanceCheckOverrides;
 
     ScalingMethod m_rewardScalingMethod = AUTOBALANCE_SCALING_DYNAMIC;
     bool m_rewardScalingXP = true;
@@ -168,9 +211,25 @@ private:
     bool m_rewardScalingMoney = true;
     float m_rewardScalingMoneyModifier = 1.0f;
 
+    // Boss Kill Encounter Reward System (experimental)
+    bool m_rewardEnable = false;
+    uint32 m_rewardRaidToken = 0;
+    uint32 m_rewardDungeonToken = 0;
+    uint8 m_minPlayerReward = 1;
+
     bool m_playerChangeNotify = true;
     bool m_announcement = true;
     bool m_debugLogging = false;
+    bool m_countGameMasters = false;
+
+    // PlayerBots (TortoiseBots)
+    bool m_countBots = true;
+    float m_botWeight = 1.0f;
+
+    // Special entity rules
+    std::unordered_set<uint32> m_creatureIDsThatAreNotClones;
+    std::unordered_set<uint32> m_spellIdsToNeverModify;
+    std::unordered_set<uint32> m_spellIdsThatSpendPlayerHealth;
 
     bool m_coexistenceDisableCoreAutoScaler = true;
 

@@ -1,7 +1,7 @@
-﻿/*
+/*
  * Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
  * Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
- * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+ * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
  */
 
 #ifndef MOD_TWOW_AUTOBALANCE_MANAGER_H
@@ -10,6 +10,7 @@
 #include "AutoBalance.h"
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 
 class Map;
@@ -27,6 +28,7 @@ public:
 
     void Initialize();
     void Reload();
+    void ApplyMemoryMapLimits();
 
     MapInfoPtr GetMapInfo(Map* map);
     MapInfoPtr GetOrCreateMapInfo(Map* map);
@@ -39,10 +41,11 @@ public:
 
     void OnPlayerEnter(Map* map, Player* player);
     void OnPlayerLeave(Map* map, Player* player);
-    void OnPlayerLevelChanged(Map* map, Player* player);
+    void HandlePlayerLevelChanged(Map* map, Player* player);
 
     void OnCreatureAdd(Creature* creature);
     void OnCreatureRemove(Creature* creature);
+    void OnCreatureDeath(Creature* creature);
     void OnCreatureRespawn(Creature* creature);
 
     void OnMapDestroy(Map* map);
@@ -65,7 +68,7 @@ private:
 
     std::unordered_map<uint32, MapInfoPtr> m_maps;
     std::unordered_map<ObjectGuid, CreatureInfoPtr> m_creatures;
-    std::mutex m_lock;
+    mutable std::shared_mutex m_lock;
 };
 
 #define sAutoBalanceMgr (AutoBalanceManager::Instance())

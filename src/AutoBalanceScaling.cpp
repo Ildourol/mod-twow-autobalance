@@ -1,13 +1,17 @@
 /*
  * Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
  * Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
- * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+ * Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
  */
 
 #include "AutoBalanceScaling.h"
+#include "AutoBalanceClassStatsData.h"
+#include "Database/DatabaseEnv.h"
 #include "Maps/Map.h"
 #include "Objects/Creature.h"
 #include "Objects/Player.h"
+#include "Objects/TemporarySummon.h"
+#include "Group/Group.h"
 #include "Log.h"
 #include <algorithm>
 #include <cmath>
@@ -15,20 +19,245 @@
 namespace AutoBalanceScaling
 {
 
+static CanonicalClassLevelStats s_ClassLevelStats[10][64];
+static bool s_ClassLevelStatsLoaded = false;
+
+static uint8 NormalizeUnitClass(uint8 unitClass)
+{
+    if (unitClass == 8)
+        return 8; // Mage
+    if (unitClass == 2)
+        return 2; // Paladin
+    return 1; // Warrior (default for 1, 4, etc.)
+}
+
+void LoadCreatureClassLevelStats()
+{
+    // 1. Initialize fallback defaults from canonical data
+    for (uint8 lvl = 1; lvl <= 63; ++lvl)
+    {
+        s_ClassLevelStats[1][lvl] = g_CanonicalClassWarriorStats[lvl];
+        s_ClassLevelStats[2][lvl] = g_CanonicalClassPaladinStats[lvl];
+        s_ClassLevelStats[8][lvl] = g_CanonicalClassMageStats[lvl];
+    }
+    s_ClassLevelStatsLoaded = true;
+
+    // 2. Safely check if creature_classlevelstats exists before querying
+    std::unique_ptr<QueryResult> tableCheck(WorldDatabase.Query("SHOW TABLES LIKE 'creature_classlevelstats'"));
+    if (tableCheck)
+    {
+        QueryResult* result = WorldDatabase.Query("SELECT class, level, melee_damage, health, mana, armor FROM creature_classlevelstats WHERE class IN (1, 2, 8) AND level <= 63");
+        if (result)
+        {
+            uint32 count = 0;
+            do
+            {
+                Field* fields = result->Fetch();
+                uint8 const cls = fields[0].GetUInt8();
+                uint8 const lvl = fields[1].GetUInt8();
+                if ((cls == 1 || cls == 2 || cls == 8) && lvl >= 1 && lvl <= 63)
+                {
+                    s_ClassLevelStats[cls][lvl].meleeDamage = fields[2].GetFloat();
+                    s_ClassLevelStats[cls][lvl].health      = fields[3].GetUInt32();
+                    s_ClassLevelStats[cls][lvl].mana        = fields[4].GetUInt32();
+                    s_ClassLevelStats[cls][lvl].armor       = fields[5].GetUInt32();
+                    ++count;
+                }
+            } while (result->NextRow());
+
+            delete result;
+            sLog.outString("[AutoBalance] Loaded %u creature class-level stats from database table creature_classlevelstats.", count);
+        }
+    }
+    else
+    {
+        sLog.outString("[AutoBalance] Database table creature_classlevelstats not available; using built-in canonical Vanilla 1.12.1 stats curve.");
+    }
+}
+
+static void EnsureClassLevelStatsLoaded()
+{
+    if (!s_ClassLevelStatsLoaded)
+        LoadCreatureClassLevelStats();
+}
+
+float GetClassLevelHealth(uint8 unitClass, uint8 level)
+{
+    EnsureClassLevelStatsLoaded();
+    uint8 const cls = NormalizeUnitClass(unitClass);
+    uint8 const lvl = static_cast<uint8>(std::max<uint8>(1, std::min<uint8>(60, level)));
+    return static_cast<float>(s_ClassLevelStats[cls][lvl].health);
+}
+
+float GetClassLevelDamage(uint8 unitClass, uint8 level)
+{
+    EnsureClassLevelStatsLoaded();
+    uint8 const cls = NormalizeUnitClass(unitClass);
+    uint8 const lvl = static_cast<uint8>(std::max<uint8>(1, std::min<uint8>(60, level)));
+    return s_ClassLevelStats[cls][lvl].meleeDamage;
+}
+
+float GetClassLevelArmor(uint8 unitClass, uint8 level)
+{
+    EnsureClassLevelStatsLoaded();
+    uint8 const cls = NormalizeUnitClass(unitClass);
+    uint8 const lvl = static_cast<uint8>(std::max<uint8>(1, std::min<uint8>(60, level)));
+    return static_cast<float>(s_ClassLevelStats[cls][lvl].armor);
+}
+
+float GetClassLevelMana(uint8 unitClass, uint8 level)
+{
+    EnsureClassLevelStatsLoaded();
+    uint8 const cls = NormalizeUnitClass(unitClass);
+    uint8 const lvl = static_cast<uint8>(std::max<uint8>(1, std::min<uint8>(60, level)));
+    return static_cast<float>(s_ClassLevelStats[cls][lvl].mana);
+}
+
+bool IsMapRaidActive(Map* map)
+{
+    if (!map)
+        return false;
+
+    if (map->IsRaid())
+        return true;
+
+    for (const auto& ref : map->GetPlayers())
+    {
+        if (Player* player = ref.getSource())
+        {
+            if (player->IsGameMaster() && !sABConfig.IsCountGameMastersEnabled())
+                continue;
+
+            Group* group = player->GetGroup();
+            if (group && group->isRaidGroup())
+                return true;
+        }
+    }
+    return false;
+}
+
+uint32 GetMapBaseCapacity(Map* map)
+{
+    if (!map)
+        return 5;
+
+    uint32 const mapId = map->GetId();
+
+    // Canonical Vanilla and Turtle WoW instance capacities:
+    // vMaNGOS map_template.player_limit contains legacy Patch 1.0-1.2 values (10 for most
+    // 5-man dungeons). This canonical table overrides legacy values to guarantee 1:1
+    // parity with authentic Vanilla and Turtle WoW (turtlecraft.gg) standards.
+    switch (mapId)
+    {
+        // 40-Player Raids
+        case 44:  // Old Scarlet Citadel (TWoW 40-man raid)
+        case 45:  // Scarlet Citadel (TWoW 40-man raid)
+        case 249: // Onyxia's Lair
+        case 409: // Molten Core
+        case 469: // Blackwing Lair
+        case 531: // Temple of Ahn'Qiraj (AQ40)
+        case 533: // Naxxramas
+        case 807: // Emerald Sanctum (TWoW 40-man raid)
+        case 814: // Tower of Karazhan / Karazhan Upper (TWoW 40-man raid)
+            return 40;
+
+        // 20-Player Raids
+        case 309: // Zul'Gurub
+        case 509: // Ruins of Ahn'Qiraj (AQ20)
+            return 20;
+
+        // 10-Player Instances & Raids
+        case 229: // Blackrock Spire (Vanilla 10-man instance / UBRS)
+        case 532: // Lower Karazhan Halls (TWoW 10-man raid)
+            return 10;
+
+        // 5-Player Dungeons (All Classic & Turtle WoW leveling dungeons)
+        case 33:  // Shadowfang Keep
+        case 34:  // Stormwind Stockade
+        case 35:  // Stormwind Vault (TWoW 5-man dungeon)
+        case 36:  // Deadmines
+        case 43:  // Wailing Caverns
+        case 47:  // Razorfen Kraul
+        case 48:  // Blackfathom Deeps
+        case 70:  // Uldaman
+        case 90:  // Gnomeregan
+        case 109: // Sunken Temple
+        case 129: // Razorfen Downs
+        case 189: // Scarlet Monastery
+        case 209: // Zul'Farrak
+        case 230: // Blackrock Depths
+        case 269: // Caverns of Time: Black Morass (TWoW 5-man dungeon)
+        case 289: // Scholomance
+        case 329: // Stratholme
+        case 349: // Maraudon
+        case 389: // Ragefire Chasm
+        case 429: // Dire Maul
+        case 800: // Karazhan Crypt (TWoW 5-man dungeon)
+        case 802: // The Crescent Grove (TWoW 5-man dungeon)
+        case 806: // Frostmane Retreat (TWoW 5-man dungeon)
+        case 808: // Hateforge Quarry (TWoW 5-man dungeon)
+        case 815: // Gilneas City (TWoW 5-man dungeon)
+            return 5;
+
+        default:
+            break;
+    }
+
+    if (map->IsRaid())
+        return 40;
+
+    return 5;
+}
+
 uint32 GetMapMaxPlayers(Map* map)
 {
     if (!map)
         return 5;
 
-    if (map->IsDungeon())
+    uint32 const baseCapacity = GetMapBaseCapacity(map);
+
+    uint32 activePlayers = 0;
+    bool isRaidGroup = false;
+    for (const auto& ref : map->GetPlayers())
     {
-        DungeonMap* dMap = reinterpret_cast<DungeonMap*>(map);
-        uint32 maxP = dMap->GetMaxPlayers();
-        if (maxP > 0)
-            return maxP;
+        if (Player* p = ref.getSource())
+        {
+            if (p->IsGameMaster() && !sABConfig.IsCountGameMastersEnabled())
+                continue;
+            ++activePlayers;
+            Group* g = p->GetGroup();
+            if (g && g->isRaidGroup())
+                isRaidGroup = true;
+        }
     }
 
-    return map->IsRaid() ? 40 : 5;
+    // Dynamic Raid Scaling for Dungeons
+    if (!map->IsRaid())
+    {
+        if (sABConfig.IsRaidScalingInDungeonsEnabled() && (isRaidGroup || activePlayers > baseCapacity))
+        {
+            if (activePlayers > 40 && sABConfig.Is60MEnabled())
+                return 60;
+            if (activePlayers > 25 && sABConfig.Is40MEnabled())
+                return 40;
+            if (activePlayers > 20 && sABConfig.Is25MEnabled())
+                return 25;
+            if (activePlayers > 15 && sABConfig.Is20MEnabled())
+                return 20;
+            if (activePlayers > 10 && sABConfig.Is15MEnabled())
+                return 15;
+            if (sABConfig.Is10MEnabled())
+                return 10;
+            return 5;
+        }
+        return baseCapacity;
+    }
+
+    // Actual Raid Instance: scale to 60 if active players exceed 40
+    if (activePlayers > baseCapacity && activePlayers > 40 && sABConfig.Is60MEnabled())
+        return 60;
+
+    return baseCapacity;
 }
 
 bool ShouldMapBeEnabled(Map* map)
@@ -57,6 +286,8 @@ bool ShouldMapBeEnabled(Map* map)
             return sABConfig.Is25MEnabled();
         case 40:
             return sABConfig.Is40MEnabled();
+        case 60:
+            return sABConfig.Is60MEnabled();
         default:
             return sABConfig.IsOtherNormalEnabled();
     }
@@ -80,11 +311,56 @@ bool IsBoss(Creature* creature)
     return false;
 }
 
+bool IsCreatureFriendlyToAnyPlayer(Creature* creature, Map* map)
+{
+    if (!creature || !map)
+        return false;
+
+    for (const auto& ref : map->GetPlayers())
+    {
+        if (Player* player = ref.getSource())
+        {
+            if (player->IsGameMaster())
+                continue;
+            if (creature->IsFriendlyTo(player))
+                return true;
+        }
+    }
+    return false;
+}
+
+bool IsCreatureWithinPlayerDistance(Creature* creature, Map* map, uint32 distance)
+{
+    if (!creature || !map)
+        return false;
+
+    for (const auto& ref : map->GetPlayers())
+    {
+        if (Player* player = ref.getSource())
+        {
+            if (player->IsGameMaster())
+                continue;
+            if (creature->IsWithinDist(player, static_cast<float>(distance)))
+                return true;
+        }
+    }
+    return false;
+}
+
 bool IsCreatureRelevant(Creature* creature)
 {
     if (!creature)
         return false;
 
+    Map* map = creature->GetMap();
+    if (!map || !map->IsDungeon())
+        return false;
+
+    // Disabled explicitly by creature entry ID
+    if (sABConfig.IsCreatureDisabled(creature->GetEntry()))
+        return false;
+
+    // Player pets and totems
     if (creature->IsPet() || creature->IsTotem())
         return false;
 
@@ -95,11 +371,61 @@ bool IsCreatureRelevant(Creature* creature)
     if (!cinfo)
         return false;
 
-    if (cinfo->type == CREATURE_TYPE_CRITTER)
+    // Flavor critter check
+    if (cinfo->type == CREATURE_TYPE_CRITTER && creature->GetLevel() <= 5 && creature->GetMaxHealth() < 100)
         return false;
 
-    if (sABConfig.IsCreatureDisabled(creature->GetEntry()))
-        return false;
+    // Temporary summon unwrapping & ownership checks
+    if (creature->IsTemporarySummon())
+    {
+        TemporarySummon* tempSummon = static_cast<TemporarySummon*>(creature);
+        Unit* summoner = tempSummon->GetSummoner();
+        if (summoner)
+        {
+            if (summoner->IsPlayer())
+            {
+                // Player summoned: only scale if hostile to valid party members
+                bool hostileToPlayers = false;
+                for (const auto& ref : map->GetPlayers())
+                {
+                    if (Player* player = ref.getSource())
+                    {
+                        if (!player->IsGameMaster() && player->IsAlive() && creature->IsHostileTo(player))
+                        {
+                            hostileToPlayers = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hostileToPlayers)
+                    return false;
+            }
+            else if (summoner->IsCreature())
+            {
+                Creature* summonerCreature = static_cast<Creature*>(summoner);
+                if (IsCreatureFriendlyToAnyPlayer(summonerCreature, map) && !IsBoss(summonerCreature))
+                    return false;
+            }
+        }
+    }
+
+    // Multi-wing instance distance check (e.g. Scarlet Monastery Map 189)
+    if (sABConfig.HasDistanceCheckOverride(map->GetId()))
+    {
+        uint32 maxDist = sABConfig.GetDistanceCheckOverride(map->GetId());
+        if (!IsCreatureWithinPlayerDistance(creature, map, maxDist))
+            return false;
+    }
+
+    // Friendly non-boss NPCs (vendors, trainers, questgivers)
+    if (!IsBoss(creature))
+    {
+        if (cinfo->npc_flags & (UNIT_NPC_FLAG_VENDOR | UNIT_NPC_FLAG_TRAINER | UNIT_NPC_FLAG_QUESTGIVER | UNIT_NPC_FLAG_REPAIR))
+            return false;
+
+        if (IsCreatureFriendlyToAnyPlayer(creature, map))
+            return false;
+    }
 
     return true;
 }
@@ -112,7 +438,8 @@ AutoBalanceInflectionPointSettings GetInflectionPointSettings(Map* map, bool isB
         return *overrideSettings;
 
     uint32 maxPlayers = GetMapMaxPlayers(map);
-    AutoBalanceInflectionPointSettings settings = (map && map->IsRaid())
+    bool const isRaid = (map && (map->IsRaid() || maxPlayers > 5 || IsMapRaidActive(map)));
+    AutoBalanceInflectionPointSettings settings = isRaid
         ? sABConfig.GetRaidInflectionSettings(maxPlayers)
         : sABConfig.GetDefaultInflectionSettings();
 
@@ -137,7 +464,8 @@ AutoBalanceStatModifiers GetStatModifiers(Map* map, Creature* creature, bool isB
         return *mOverride;
 
     uint32 maxPlayers = GetMapMaxPlayers(map);
-    if (map && map->IsRaid())
+    bool const isRaid = (map && (map->IsRaid() || maxPlayers > 5 || IsMapRaidActive(map)));
+    if (isRaid)
         return sABConfig.GetRaidStatModifiers(maxPlayers, isBoss);
 
     return isBoss ? sABConfig.GetBossStatModifiers() : sABConfig.GetNormalStatModifiers();
@@ -182,16 +510,28 @@ uint8 CalculateScaledLevel(Creature* creature, AutoBalanceMapInfo const& mapInfo
         return unmodifiedLevel;
 
     int const baseLevel = static_cast<int>(unmodifiedLevel);
-    int const playerLevel = static_cast<int>(mapInfo.highestPlayerLevel);
-    int const delta = baseLevel - playerLevel;
+    // Hard clamp player level to Vanilla maximum level 60
+    int const playerLevel = std::min(60, static_cast<int>(mapInfo.highestPlayerLevel));
 
-    // Creatures already near the group's level stay at their native level.
-    if (delta <= static_cast<int>(mapInfo.levelScalingSkipHigherLevels) &&
-        delta >= -static_cast<int>(mapInfo.levelScalingSkipLowerLevels))
+    // Upstream parity: evaluate skip range against the dungeon's average creature level.
+    // If the dungeon's overall difficulty is already within the skip range of the group,
+    // preserve the authentic dungeon level spread for all creatures.
+    float const dungeonLevel = (mapInfo.avgCreatureLevel > 0.0f) ? mapInfo.avgCreatureLevel :
+        ((mapInfo.highestCreatureLevel > 0 && mapInfo.lowestCreatureLevel > 0)
+            ? static_cast<float>(mapInfo.highestCreatureLevel + mapInfo.lowestCreatureLevel) / 2.0f
+            : static_cast<float>(unmodifiedLevel));
+
+    int const skipHigher = static_cast<int>(mapInfo.levelScalingSkipHigherLevels);
+    int const skipLower  = static_cast<int>(mapInfo.levelScalingSkipLowerLevels);
+
+    if (skipHigher > 0 && dungeonLevel <= static_cast<float>(playerLevel + skipHigher) &&
+        skipLower > 0 && dungeonLevel >= static_cast<float>(playerLevel - skipLower))
+    {
         return unmodifiedLevel;
+    }
 
     if (sABConfig.GetLevelScalingMethod() == AUTOBALANCE_SCALING_FIXED)
-        return mapInfo.highestPlayerLevel;
+        return static_cast<uint8>(playerLevel);
 
     // Dynamic level scaling
     if (mapInfo.highestCreatureLevel == 0)
@@ -204,7 +544,8 @@ uint8 CalculateScaledLevel(Creature* creature, AutoBalanceMapInfo const& mapInfo
     int const maxLevel = playerLevel + static_cast<int>(mapInfo.levelScalingDynamicCeiling);
 
     targetLevel = std::max(minLevel, std::min(maxLevel, targetLevel));
-    return static_cast<uint8>(std::max(1, std::min(63, targetLevel)));
+    // Clamped strictly to Vanilla maximum level 60
+    return static_cast<uint8>(std::max(1, std::min(60, targetLevel)));
 }
 
 void InitializeCreatureBaseData(Creature* creature, AutoBalanceCreatureInfo& cInfo)
@@ -229,10 +570,30 @@ void InitializeCreatureBaseData(Creature* creature, AutoBalanceCreatureInfo& cIn
     // include the configured elite/world-boss rank damage modifier.
     cInfo.baseData.baseMinDamage = creature->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE);
     cInfo.baseData.baseMaxDamage = creature->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE);
+    if (cInfo.baseData.baseMinDamage <= 0.0f && cinfo->dmg_min > 0.0f)
+        cInfo.baseData.baseMinDamage = cinfo->dmg_min;
+    if (cInfo.baseData.baseMaxDamage <= 0.0f && cinfo->dmg_max > 0.0f)
+        cInfo.baseData.baseMaxDamage = cinfo->dmg_max;
+
     cInfo.baseData.baseRangedMinDamage = creature->GetWeaponDamageRange(RANGED_ATTACK, MINDAMAGE);
     cInfo.baseData.baseRangedMaxDamage = creature->GetWeaponDamageRange(RANGED_ATTACK, MAXDAMAGE);
+    if (cInfo.baseData.baseRangedMinDamage <= 0.0f && cinfo->ranged_dmg_min > 0.0f)
+        cInfo.baseData.baseRangedMinDamage = cinfo->ranged_dmg_min;
+    if (cInfo.baseData.baseRangedMaxDamage <= 0.0f && cinfo->ranged_dmg_max > 0.0f)
+        cInfo.baseData.baseRangedMaxDamage = cinfo->ranged_dmg_max;
+
     cInfo.baseData.baseAttackPower = cinfo->attack_power;
-    cInfo.baseData.baseLevel = creature->GetLevel();
+
+    // Determine authentic base level:
+    // If the creature's current level is outside template bounds [minlevel, maxlevel],
+    // it was previously modified or scaled. Never inherit a post-scaled level!
+    uint8 baseLvl = creature->GetLevel();
+    if (cinfo->level_min > 0 && cinfo->level_max > 0)
+    {
+        if (baseLvl < cinfo->level_min || baseLvl > cinfo->level_max)
+            baseLvl = static_cast<uint8>(cinfo->level_max);
+    }
+    cInfo.baseData.baseLevel = baseLvl;
     cInfo.baseData.baseGoldMin = cinfo->gold_min;
     cInfo.baseData.baseGoldMax = cinfo->gold_max;
     cInfo.baseData.initialized = true;
@@ -248,6 +609,17 @@ void CalculateMultipliers(Map* map, Creature* creature, AutoBalanceMapInfo const
         return;
 
     InitializeCreatureBaseData(creature, cInfo);
+
+    // If temporary summon of another creature, inherit unmodified level unless not a clone
+    if (creature->IsTemporarySummon())
+    {
+        TemporarySummon* tempSummon = static_cast<TemporarySummon*>(creature);
+        Unit* summoner = tempSummon->GetSummoner();
+        if (summoner && summoner->IsCreature() && !sABConfig.IsNotAClone(creature->GetEntry()))
+        {
+            cInfo.unmodifiedLevel = summoner->GetLevel();
+        }
+    }
 
     uint32 maxPlayers = GetMapMaxPlayers(map);
     int forcedCount = sABConfig.GetForcedPlayerCount(creature->GetEntry());
@@ -267,20 +639,52 @@ void CalculateMultipliers(Map* map, Creature* creature, AutoBalanceMapInfo const
     cInfo.ccDurationMultiplier = std::min(sABConfig.GetMaxCCDurationModifier(),
                                  std::max(sABConfig.GetMinCCDurationModifier(), defaultMultiplier * statMod.ccduration));
 
-    // Level scaling calculations
+    // Level scaling calculations using authentic Vanilla creature class-level stats
     if (mapInfo.isLevelScalingEnabled && !cInfo.neverLevelScale)
     {
         cInfo.selectedLevel = CalculateScaledLevel(creature, mapInfo, cInfo.unmodifiedLevel);
         if (cInfo.unmodifiedLevel > 0 && cInfo.selectedLevel != cInfo.unmodifiedLevel)
         {
-            float levelRatio = static_cast<float>(cInfo.selectedLevel) / static_cast<float>(cInfo.unmodifiedLevel);
-            cInfo.scaledHealthMultiplier = cInfo.healthMultiplier * levelRatio;
-            cInfo.scaledManaMultiplier   = cInfo.manaMultiplier * levelRatio;
-            cInfo.scaledArmorMultiplier  = cInfo.armorMultiplier * levelRatio;
-            cInfo.scaledDamageMultiplier = cInfo.damageMultiplier * levelRatio;
+            uint8 const origLvl = cInfo.unmodifiedLevel;
+            uint8 const newLvl = cInfo.selectedLevel;
+            CreatureInfo const* cinfo = creature->GetCreatureInfo();
+            uint8 const unitClass = cinfo ? cinfo->unit_class : 1;
+
+            float const origHp = GetClassLevelHealth(unitClass, origLvl);
+            float const newHp  = GetClassLevelHealth(unitClass, newLvl);
+            float const hpRatio = (origHp > 0.0f) ? (newHp / origHp) : 1.0f;
+
+            float const origDmg = GetClassLevelDamage(unitClass, origLvl);
+            float const newDmg  = GetClassLevelDamage(unitClass, newLvl);
+            float const dmgRatio = (origDmg > 0.0f) ? (newDmg / origDmg) : 1.0f;
+
+            float const origArmor = GetClassLevelArmor(unitClass, origLvl);
+            float const newArmor  = GetClassLevelArmor(unitClass, newLvl);
+            float const armorRatio = (origArmor > 0.0f) ? (newArmor / origArmor) : 1.0f;
+
+            float const origMana = GetClassLevelMana(unitClass, origLvl);
+            float const newMana  = GetClassLevelMana(unitClass, newLvl);
+            float const manaRatio = (origMana > 0.0f) ? (newMana / origMana) : 1.0f;
+
+            cInfo.scaledHealthMultiplier = std::max(sABConfig.GetMinHPModifier(), cInfo.healthMultiplier * hpRatio);
+            cInfo.scaledDamageMultiplier = std::max(sABConfig.GetMinDamageModifier(), cInfo.damageMultiplier * dmgRatio);
+            cInfo.scaledArmorMultiplier  = std::max(0.0f, cInfo.armorMultiplier * armorRatio);
+            cInfo.scaledManaMultiplier   = (cInfo.baseData.baseMana > 0) ? (cInfo.manaMultiplier * manaRatio) : 0.0f;
+
+            // When scaling UP in level, guarantee that scaled multipliers never degrade below
+            // the creature's unscaled baseline player-multiplier (prevents Level 60 mobs from
+            // ending up with lower stats than lower-level creatures due to compounding formulas).
+            if (newLvl > origLvl)
+            {
+                if (cInfo.scaledHealthMultiplier < cInfo.healthMultiplier)
+                    cInfo.scaledHealthMultiplier = cInfo.healthMultiplier;
+                if (cInfo.scaledDamageMultiplier < cInfo.damageMultiplier)
+                    cInfo.scaledDamageMultiplier = cInfo.damageMultiplier;
+            }
         }
         else
         {
+            cInfo.selectedLevel = cInfo.unmodifiedLevel;
             cInfo.scaledHealthMultiplier = cInfo.healthMultiplier;
             cInfo.scaledManaMultiplier   = cInfo.manaMultiplier;
             cInfo.scaledArmorMultiplier  = cInfo.armorMultiplier;
@@ -296,11 +700,14 @@ void CalculateMultipliers(Map* map, Creature* creature, AutoBalanceMapInfo const
         cInfo.scaledDamageMultiplier = cInfo.damageMultiplier;
     }
 
-    // Reward scaling calculations
+    // Reward scaling calculations matching upstream mod-autobalance-wotlk:
+    // Uses average of scaled health & damage multipliers so rewards account for both
+    // group player count and level scaling difficulty!
+    float const avgHealthDamageMultipliers = (cInfo.scaledHealthMultiplier + cInfo.scaledDamageMultiplier) / 2.0f;
     if (sABConfig.IsRewardScalingXPEnabled())
     {
         if (sABConfig.GetRewardScalingMethod() == AUTOBALANCE_SCALING_DYNAMIC)
-            cInfo.xpModifier = defaultMultiplier * sABConfig.GetRewardScalingXPModifier();
+            cInfo.xpModifier = avgHealthDamageMultipliers * sABConfig.GetRewardScalingXPModifier();
         else
             cInfo.xpModifier = sABConfig.GetRewardScalingXPModifier();
     }
@@ -310,7 +717,7 @@ void CalculateMultipliers(Map* map, Creature* creature, AutoBalanceMapInfo const
     if (sABConfig.IsRewardScalingMoneyEnabled())
     {
         if (sABConfig.GetRewardScalingMethod() == AUTOBALANCE_SCALING_DYNAMIC)
-            cInfo.moneyModifier = defaultMultiplier * sABConfig.GetRewardScalingMoneyModifier();
+            cInfo.moneyModifier = avgHealthDamageMultipliers * sABConfig.GetRewardScalingMoneyModifier();
         else
             cInfo.moneyModifier = sABConfig.GetRewardScalingMoneyModifier();
     }

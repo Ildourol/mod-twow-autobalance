@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2018 AzerothCore <http://www.azerothcore.org>
 # Copyright (C) 2012 CVMagic <http://www.trinitycore.org/f/topic/6551-vas-autobalance/>
-# Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1)
+# Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272)
 #
 # AutoBalance Configuration File
 #
@@ -38,12 +38,13 @@ AutoBalance.Enable.15M = 1
 AutoBalance.Enable.20M = 1
 AutoBalance.Enable.25M = 1
 AutoBalance.Enable.40M = 1
+AutoBalance.Enable.60M = 1
 AutoBalance.Enable.OtherNormal = 1
 
 #
 #    AutoBalance.Disable.PerInstance
 #        Description: Comma-separated list of Map IDs where AutoBalance will be disabled.
-#        Example:     "33,34"
+#        Example:     "33, 34"
 #        Default:     ""
 
 AutoBalance.Disable.PerInstance = ""
@@ -60,73 +61,146 @@ AutoBalance.MinPlayers.Raid = 1
 #
 #    AutoBalance.MinPlayers.PerInstance
 #        Description: Custom minimum player count overrides per map ID.
-#        Format:      "mapId:minPlayers,mapId:minPlayers"
-#        Example:     "469:5,409:10"
+#        Format:      "mapId minPlayers, mapId minPlayers" (or legacy "mapId:minPlayers")
+#        Example:     "469 5, 409 10"
 #        Default:     ""
 
 AutoBalance.MinPlayers.PerInstance = ""
 
 ###################################################################################################
-# INFLECTION POINT & CURVE SETTINGS
+# ZERO-SQL IN-MEMORY INSTANCE PLAYER LIMITS
+#
+#    AutoBalance.PlayerLimit.Dungeons.Min
+#    AutoBalance.PlayerLimit.Dungeons.Max
+#        Description: Minimum player baseline and maximum entrance player capacity for
+#                     all 5-player leveling dungeons (Deadmines, SFK, WC, SM, BRD, Scholo, etc.).
+#                     Applied directly in memory at boot without any SQL database edits.
+#        Default:     Min = 1, Max = 60 (Default: maximum allowed players)
+#
+#    AutoBalance.PlayerLimit.Raids.Min
+#    AutoBalance.PlayerLimit.Raids.Max
+#        Description: Minimum player baseline and maximum entrance player capacity for
+#                     all raid instances (UBRS, ZG, AQ20, Onyxia, MC, BWL, AQ40, Naxx, etc.).
+#                     Applied directly in memory at boot without any SQL database edits.
+#        Default:     Min = 1, Max = 60 (Default: maximum allowed players)
+
+AutoBalance.PlayerLimit.Dungeons.Min = 1
+AutoBalance.PlayerLimit.Dungeons.Max = 60
+
+AutoBalance.PlayerLimit.Raids.Min = 1
+AutoBalance.PlayerLimit.Raids.Max = 60
+
+#
+#    AutoBalance.RaidScalingInDungeons
+#        Description: When players enter a normal 5-man dungeon as a raid group (or with >5 players),
+#                     scale creature stats dynamically for the full raid player count instead of
+#                     clamping to standard 5-man party size.
+#        Default:     1 - (Enabled, 10-man raid in Deadmines scales to 10 players)
+#                     0 - (Disabled, clamped to 5 players)
+
+AutoBalance.RaidScalingInDungeons = 1
+
+###################################################################################################
+# PLAYERBOTS (TORTOISEBOTS) INTEGRATION
+#
+#    AutoBalance.CountBots
+#        Description: Count active PlayerBots sessions as party members for difficulty scaling.
+#        Default:     1 - (Enabled, count bots toward player count)
+#                     0 - (Disabled, bots do not increase enemy scaling)
+
+AutoBalance.CountBots = 1
+
+#
+#    AutoBalance.BotWeight
+#        Description: Difficulty weight per bot (e.g., 1.0 = bot counts as a full human player,
+#                     0.75 = bot counts as 75% of a human player).
+#        Default:     1.0
+
+AutoBalance.BotWeight = 1.0
+
+###################################################################################################
+# INFLECTION POINT & CURVE SETTINGS (VANILLA & TURTLE WOW CALIBRATION)
 #
 #    The inflection point controls the curvature of the hyperbolic tangent (tanh) scaling function.
-#    - value: The player count center where difficulty scaling changes curvature (default: 0.5)
-#    - CurveFloor: Minimum bound of the scaling curve multiplier (default: 0.0)
-#    - CurveCeiling: Maximum bound of the scaling curve multiplier (default: 1.0)
+#    - value: The player count center where difficulty scaling changes curvature (default: 0.5 = half capacity)
+#    - CurveFloor: Minimum bound of the scaling curve multiplier.
+#        NOTE FOR VANILLA 1.12.1:
+#        In Vanilla WoW, dungeon elite creatures have approx. 2.5x - 3.0x the health of normal outdoor mobs.
+#        A CurveFloor of 0.0 reduces 1-player scaling in 5-man dungeons down to 12.35% (0.1235), causing Level 60
+#        dungeon elites to collapse to ~988 HP (weaker than outdoor level 35 mobs and lower than unscaled level 15 elites).
+#        Setting CurveFloor to 0.20 yields a calibrated solo multiplier of ~30% (0.2987), ensuring Level 60 elites
+#        scale to an authentic soloable ~2,800 - 3,200 HP and Level 18 elites scale to ~390 HP.
+#    - CurveCeiling: Maximum bound of the scaling curve multiplier (default: 1.0 = 100% full group stats)
 #    - BossModifier: Multiplier applied to inflection point value for bosses (default: 1.0)
 
+### 5-player normal dungeons (Deadmines, WC, SFK, Stockade, BFD, RFK, SM, RFD, Uldaman, ZF, Mara, ST, BRD, Scholo, Strath, DM, etc.)
 AutoBalance.InflectionPoint = 0.5
-AutoBalance.InflectionPoint.CurveFloor = 0.0
+AutoBalance.InflectionPoint.CurveFloor = 0.20
 AutoBalance.InflectionPoint.CurveCeiling = 1.0
 AutoBalance.InflectionPoint.BossModifier = 1.0
 
+### Raids (Default for all raids unless overridden below)
 AutoBalance.InflectionPointRaid = 0.5
-AutoBalance.InflectionPointRaid.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid.CurveFloor = 0.05
 AutoBalance.InflectionPointRaid.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid.BossModifier = 1.0
 
+### 10-player raids & instances (Blackrock Spire / UBRS Map 229, Lower Karazhan Halls Map 532)
+# CurveFloor 0.10 yields ~16% solo multiplier (e.g. ~2,400 HP trash, ~9,600 HP Drakkisath)
 AutoBalance.InflectionPointRaid10M = 0.5
-AutoBalance.InflectionPointRaid10M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid10M.CurveFloor = 0.10
 AutoBalance.InflectionPointRaid10M.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid10M.BossModifier = 1.0
 
+### 15-player instances
 AutoBalance.InflectionPointRaid15M = 0.5
-AutoBalance.InflectionPointRaid15M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid15M.CurveFloor = 0.08
 AutoBalance.InflectionPointRaid15M.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid15M.BossModifier = 1.0
 
+### 20-player raids (Zul'Gurub Map 309, Ruins of Ahn'Qiraj Map 509)
+# CurveFloor 0.05 yields ~9.7% solo multiplier (~2,400 HP trash, ~43,500 HP Hakkar)
 AutoBalance.InflectionPointRaid20M = 0.5
-AutoBalance.InflectionPointRaid20M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid20M.CurveFloor = 0.05
 AutoBalance.InflectionPointRaid20M.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid20M.BossModifier = 1.0
 
+### 25-player raids
 AutoBalance.InflectionPointRaid25M = 0.5
-AutoBalance.InflectionPointRaid25M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid25M.CurveFloor = 0.04
 AutoBalance.InflectionPointRaid25M.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid25M.BossModifier = 1.0
 
+### 40-player raids (Molten Core Map 409, Blackwing Lair Map 469, Temple of Ahn'Qiraj Map 531, Naxxramas Map 533,
+### Onyxia Map 249, Emerald Sanctum Map 807, Tower of Karazhan Map 814, Scarlet Citadel Map 45)
+# CurveFloor 0.02 yields ~6.1% solo multiplier (~61,000 HP Ragnaros) and ~9.7% for a 5-player dungeon party
 AutoBalance.InflectionPointRaid40M = 0.5
-AutoBalance.InflectionPointRaid40M.CurveFloor = 0.0
+AutoBalance.InflectionPointRaid40M.CurveFloor = 0.02
 AutoBalance.InflectionPointRaid40M.CurveCeiling = 1.0
 AutoBalance.InflectionPointRaid40M.BossModifier = 1.0
 
-#
-#    AutoBalance.InflectionPoint.PerInstance
-#    AutoBalance.InflectionPoint.Boss.PerInstance
-#        Description: Per-map inflection point overrides.
-#        Format:      "mapId:value:floor:ceiling:bossMod,..."
-#        Default:     ""
+### 60-player raids & extended instances
+# CurveFloor 0.015 yields ~5.5% solo multiplier and authentic scaling up to 60 players
+AutoBalance.InflectionPointRaid60M = 0.5
+AutoBalance.InflectionPointRaid60M.CurveFloor = 0.015
+AutoBalance.InflectionPointRaid60M.CurveCeiling = 1.0
+AutoBalance.InflectionPointRaid60M.BossModifier = 1.0
 
+# Per-instance overrides:
+# Format: "mapId value floor ceiling [bossMod], ..." (support -1 to inherit default)
 AutoBalance.InflectionPoint.PerInstance = ""
 AutoBalance.InflectionPoint.Boss.PerInstance = ""
 
 ###################################################################################################
-# STAT MODIFIERS
+# STAT MODIFIER SETTINGS
 #
-#    Multipliers applied on top of the calculated inflection curve multiplier.
-#    - Global: Multiplier applied to all stats
-#    - Health, Mana, Armor, Damage: Specific stat multipliers
-#    - CCDuration: Crowd control duration multiplier
+#    Global and per-stat multipliers applied on top of the inflection multiplier:
+#    - Global: Multiplier for all creature stats
+#    - Health: Multiplier for creature HP
+#    - Mana: Multiplier for creature Mana
+#    - Armor: Multiplier for creature Armor
+#    - Damage: Multiplier for creature Damage
+#    - CCDuration: Multiplier for crowd-control duration applied to players
 
 AutoBalance.StatModifier.Global = 1.0
 AutoBalance.StatModifier.Health = 1.0
@@ -149,26 +223,12 @@ AutoBalance.StatModifierRaid.Armor = 1.0
 AutoBalance.StatModifierRaid.Damage = 1.0
 AutoBalance.StatModifierRaid.CCDuration = 1.0
 
-AutoBalance.StatModifierRaid.Boss.Global = 1.0
-AutoBalance.StatModifierRaid.Boss.Health = 1.0
-AutoBalance.StatModifierRaid.Boss.Mana = 1.0
-AutoBalance.StatModifierRaid.Boss.Armor = 1.0
-AutoBalance.StatModifierRaid.Boss.Damage = 1.0
-AutoBalance.StatModifierRaid.Boss.CCDuration = 1.0
-
 AutoBalance.StatModifierRaid10M.Global = 1.0
 AutoBalance.StatModifierRaid10M.Health = 1.0
 AutoBalance.StatModifierRaid10M.Mana = 1.0
 AutoBalance.StatModifierRaid10M.Armor = 1.0
 AutoBalance.StatModifierRaid10M.Damage = 1.0
 AutoBalance.StatModifierRaid10M.CCDuration = 1.0
-
-AutoBalance.StatModifierRaid10M.Boss.Global = 1.0
-AutoBalance.StatModifierRaid10M.Boss.Health = 1.0
-AutoBalance.StatModifierRaid10M.Boss.Mana = 1.0
-AutoBalance.StatModifierRaid10M.Boss.Armor = 1.0
-AutoBalance.StatModifierRaid10M.Boss.Damage = 1.0
-AutoBalance.StatModifierRaid10M.Boss.CCDuration = 1.0
 
 AutoBalance.StatModifierRaid20M.Global = 1.0
 AutoBalance.StatModifierRaid20M.Health = 1.0
@@ -177,19 +237,40 @@ AutoBalance.StatModifierRaid20M.Armor = 1.0
 AutoBalance.StatModifierRaid20M.Damage = 1.0
 AutoBalance.StatModifierRaid20M.CCDuration = 1.0
 
-AutoBalance.StatModifierRaid20M.Boss.Global = 1.0
-AutoBalance.StatModifierRaid20M.Boss.Health = 1.0
-AutoBalance.StatModifierRaid20M.Boss.Mana = 1.0
-AutoBalance.StatModifierRaid20M.Boss.Armor = 1.0
-AutoBalance.StatModifierRaid20M.Boss.Damage = 1.0
-AutoBalance.StatModifierRaid20M.Boss.CCDuration = 1.0
-
 AutoBalance.StatModifierRaid40M.Global = 1.0
 AutoBalance.StatModifierRaid40M.Health = 1.0
 AutoBalance.StatModifierRaid40M.Mana = 1.0
 AutoBalance.StatModifierRaid40M.Armor = 1.0
 AutoBalance.StatModifierRaid40M.Damage = 1.0
 AutoBalance.StatModifierRaid40M.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid60M.Global = 1.0
+AutoBalance.StatModifierRaid60M.Health = 1.0
+AutoBalance.StatModifierRaid60M.Mana = 1.0
+AutoBalance.StatModifierRaid60M.Armor = 1.0
+AutoBalance.StatModifierRaid60M.Damage = 1.0
+AutoBalance.StatModifierRaid60M.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid.Boss.Global = 1.0
+AutoBalance.StatModifierRaid.Boss.Health = 1.0
+AutoBalance.StatModifierRaid.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid10M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid10M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid10M.Boss.CCDuration = 1.0
+
+AutoBalance.StatModifierRaid20M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid20M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid20M.Boss.CCDuration = 1.0
 
 AutoBalance.StatModifierRaid40M.Boss.Global = 1.0
 AutoBalance.StatModifierRaid40M.Boss.Health = 1.0
@@ -198,14 +279,15 @@ AutoBalance.StatModifierRaid40M.Boss.Armor = 1.0
 AutoBalance.StatModifierRaid40M.Boss.Damage = 1.0
 AutoBalance.StatModifierRaid40M.Boss.CCDuration = 1.0
 
-#
-#    AutoBalance.StatModifier.PerInstance
-#    AutoBalance.StatModifier.Boss.PerInstance
-#    AutoBalance.StatModifier.PerCreature
-#        Description: Per-instance and per-creature stat modifier overrides.
-#        Format:      "id:global:health:mana:armor:damage:ccduration,..."
-#        Default:     ""
+AutoBalance.StatModifierRaid60M.Boss.Global = 1.0
+AutoBalance.StatModifierRaid60M.Boss.Health = 1.0
+AutoBalance.StatModifierRaid60M.Boss.Mana = 1.0
+AutoBalance.StatModifierRaid60M.Boss.Armor = 1.0
+AutoBalance.StatModifierRaid60M.Boss.Damage = 1.0
+AutoBalance.StatModifierRaid60M.Boss.CCDuration = 1.0
 
+# Per-instance & per-creature stat modifiers
+# Format: "id global health mana armor damage ccduration, ..." (support -1 to inherit default)
 AutoBalance.StatModifier.PerInstance = ""
 AutoBalance.StatModifier.Boss.PerInstance = ""
 AutoBalance.StatModifier.PerCreature = ""
@@ -238,6 +320,7 @@ AutoBalance.playerCountDifficultyOffset = 0
 #        Default:     ""
 
 AutoBalance.ForcedID40 = ""
+AutoBalance.ForcedID25 = ""
 AutoBalance.ForcedID20 = ""
 AutoBalance.ForcedID10 = ""
 AutoBalance.ForcedID5 = ""
@@ -255,10 +338,10 @@ AutoBalance.DisabledID = ""
 #
 #    AutoBalance.LevelScaling
 #        Description: Enable level scaling of dungeon creatures to match player levels.
-#        Default:     0 - (Disabled)
-#                     1 - (Enabled)
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
 
-AutoBalance.LevelScaling = 0
+AutoBalance.LevelScaling = 1
 
 #
 #    AutoBalance.LevelScaling.Method
@@ -279,8 +362,13 @@ AutoBalance.LevelScaling.DynamicLevel.Ceiling.Raids = 3
 AutoBalance.LevelScaling.DynamicLevel.Floor.Raids = 5
 
 # Per-instance format:
-# "mapId:skipHigher:skipLower:ceiling:floor,mapId:skipHigher:skipLower:ceiling:floor"
+# "mapId skipHigher skipLower ceiling floor, ..." (support -1 to inherit default)
 AutoBalance.LevelScaling.DynamicLevel.PerInstance = ""
+
+# Multi-wing Instance Proximity Distance Check
+# Format: "mapId distance, ..."
+# Default: Scarlet Monastery (Map 189) checked at 500 world units proximity
+AutoBalance.LevelScaling.DynamicLevel.DistanceCheck.PerInstance = "189 500"
 
 ###################################################################################################
 # REWARD SCALING (XP & MONEY)
@@ -297,6 +385,29 @@ AutoBalance.RewardScaling.XP.Modifier = 1.0
 
 AutoBalance.RewardScaling.Money = 1
 AutoBalance.RewardScaling.Money.Modifier = 1.0
+
+###################################################################################################
+# REWARD SYSTEM (experimental)
+#
+#    AutoBalance.reward.enable
+#        Description: Experimental feature to reward Level 60 players who defeat a dungeon or
+#                     raid boss when level scaling is active.
+#        Default:     0 - (Disabled)
+#
+#    AutoBalance.reward.raidToken
+#    AutoBalance.reward.dungeonToken
+#        Description: Item IDs to reward upon boss defeat (e.g. badge/token entry).
+#                     Set to 0 to disable rewarding tokens for that instance type.
+#        Default:     0 (Raid Token), 0 (Dungeon Token)
+#
+#    AutoBalance.reward.MinPlayerReward
+#        Description: Minimum number of players in the instance required to qualify for boss rewards.
+#        Default:     1
+
+AutoBalance.reward.enable = 0
+AutoBalance.reward.raidToken = 0
+AutoBalance.reward.dungeonToken = 0
+AutoBalance.reward.MinPlayerReward = 1
 
 ###################################################################################################
 # NOTIFICATIONS & DIAGNOSTICS
@@ -320,6 +431,16 @@ AutoBalanceAnnounce.enable = 1
 #        Default:     0 - (Disabled)
 
 AutoBalance.DebugLog = 0
+
+#
+#    AutoBalance.CountGameMasters
+#        Description: Whether to count Game Masters (.gm on) in dungeon player scaling.
+#                     When 0 (default), GMs are excluded from player counts (upstream behavior).
+#                     When 1, GMs are counted as active players for scaling calculation.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+AutoBalance.CountGameMasters = 0
 
 ###################################################################################################
 # COEXISTENCE PROTECTION
