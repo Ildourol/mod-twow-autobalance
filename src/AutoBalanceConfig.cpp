@@ -243,10 +243,10 @@ void AutoBalanceConfig::ParseDistanceCheckOverrides(std::string const& str, std:
 
 void AutoBalanceConfig::Load()
 {
-    // Check TwowAutoBalance.Enable or AutoBalance.Enable.Global
-    m_enableGlobal = sConfig.GetBoolDefault("TwowAutoBalance.Enable", false);
+    // Check AutoBalance.Enable.Global (or legacy TwowAutoBalance.Enable)
+    m_enableGlobal = sConfig.GetBoolDefault("AutoBalance.Enable.Global", false);
     if (!m_enableGlobal)
-        m_enableGlobal = sConfig.GetBoolDefault("AutoBalance.Enable.Global", false);
+        m_enableGlobal = sConfig.GetBoolDefault("TwowAutoBalance.Enable", false);
 
     m_enable5M = sConfig.GetBoolDefault("AutoBalance.Enable.5M", true);
     m_enable10M = sConfig.GetBoolDefault("AutoBalance.Enable.10M", true);

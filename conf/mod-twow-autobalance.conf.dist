@@ -11,13 +11,11 @@
 ###################################################################################################
 # AUTOBALANCE GENERAL SETTINGS
 #
-#    TwowAutoBalance.Enable
 #    AutoBalance.Enable.Global
 #        Description: Enable or disable the AutoBalance module globally.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 
-TwowAutoBalance.Enable = 0
 AutoBalance.Enable.Global = 0
 
 #

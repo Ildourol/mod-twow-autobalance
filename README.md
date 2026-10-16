@@ -2,16 +2,16 @@
 
 ![mod-twow-autobalance](mod-twow-autobalance.jpg)
 
-Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** module, adapted for **TortoiseWoW** and **Turtle WoW** (client 1.18.1.7272).
+Vanilla 1.12.1 port of the AzerothCore **mod-autobalance** module, adapted for **TortoiseWoW** and **Turtle WoW** (client 1.18.1.7272).
 
 ---
 
 ## 1. Overview
 
-`mod-twow-autobalance` dynamically adjusts dungeon and raid encounter difficulty based on the number and levels of active players inside an instance. It allows small groups (or even solo players with or without PlayerBots) to experience group content with smoothly scaled health, mana, armor, damage, and crowd-control mechanics while maintaining the intended boss encounter pacing.
+`mod-twow-autobalance` dynamically adjusts dungeon and raid encounter difficulty based on the number and levels of active players inside an instance. It allows small groups (or solo players with or without PlayerBots) to experience group content with smoothly scaled health, mana, armor, damage, and crowd-control mechanics while maintaining the intended encounter pacing.
 
 ### Key Highlights
-- **100% Non-Intrusive (The Unediting Doctrine)**: Zero patches to `tortoise-wow` or `TortoiseBots`. All hooks use native virtual script hooks (`UnitScript`, `PlayerScript`, `AllMapScript`).
+- **Non-Intrusive Integration**: Zero core modifications or source code patches required for `tortoise-wow` or `TortoiseBots`. All hooks use native virtual script hooks (`UnitScript`, `PlayerScript`, `AllMapScript`).
 - **Smooth Hyperbolic Tangent (tanh) Scaling**: Smooth sigmoid curves parameterized by inflection points, floor, ceiling, and boss modifiers (1:1 parity with upstream WotLK).
 - **Dynamic & Fixed Level Scaling**: Scales creature levels, health, mana, and damage relative to the highest player level in the party.
 - **Multi-Wing Distance Proximity**: Distance-checked creature activation for multi-wing dungeons such as Scarlet Monastery (Map 189).
@@ -27,7 +27,7 @@ Native Vanilla 1.12.1 port of the acclaimed AzerothCore **mod-autobalance** modu
 
 ## 2. Installation
 
-Under **The Unediting Doctrine**, no core modifications or git patches are required.
+The module integrates cleanly without requiring core modifications or source code patches.
 
 ### 2.1 Clone or Link the Module
 
@@ -56,20 +56,18 @@ tortoise-wow/
 
 ### 2.2 Configure the Module
 
-Copy the distributed configuration file:
+Copy the distributed configuration template:
 
 ```bash
 cp modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf.dist \
    modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf
 ```
 
-At minimum, enable the module with:
+Enable the module in `mod-twow-autobalance.conf`:
 
 ```ini
-TwowAutoBalance.Enable = 1
+AutoBalance.Enable.Global = 1
 ```
-
-(`AutoBalance.Enable.Global = 1` is also accepted as an alias).
 
 ### 2.3 Configure and Build TortoiseWoW
 
@@ -172,8 +170,6 @@ When running with `TortoiseBots`:
 
 ---
 
-## 7. License & Credits
+## 7. Credits
 
-- Ported to TortoiseWoW / Turtle WoW by Antigravity (Google DeepMind).
-- Original AzerothCore mod-autobalance authors: **VAS**, **CVMagic**, and the **AzerothCore Community**.
-- Licensed under the GNU General Public License v2 (GPLv2).
+- Based on the original AzerothCore `mod-autobalance` module by **VAS**, **CVMagic**, and the **AzerothCore Community**.
