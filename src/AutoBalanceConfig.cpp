@@ -421,7 +421,7 @@ void AutoBalanceConfig::Load()
     );
 
     ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.PerInstance", ""), m_mapStatModifierOverrides);
-    ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.Boss.PerInstance", ""), m_bossMapBossStatModifierOverrides);
+    ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.Boss.PerInstance", ""), m_mapBossStatModifierOverrides);
     ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.PerCreature", ""), m_creatureStatModifierOverrides);
 
     // Multiplier Clamp Bounds
@@ -575,8 +575,8 @@ AutoBalanceStatModifiers const* AutoBalanceConfig::GetMapStatModifierOverride(ui
 {
     if (isBoss)
     {
-        auto itBoss = m_bossMapInflectionOverrides.find(mapId);
-        if (itBoss != m_bossMapInflectionOverrides.end())
+        auto itBoss = m_mapBossStatModifierOverrides.find(mapId);
+        if (itBoss != m_mapBossStatModifierOverrides.end())
             return &itBoss->second;
     }
 
