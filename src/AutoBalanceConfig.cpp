@@ -37,28 +37,19 @@ std::vector<std::string> AutoBalanceConfig::Tokenize(std::string const& str, cha
     std::string token;
     while (std::getline(ss, token, delimiter))
     {
-        // trim whitespace
-        size_t first = token.find_first_not_of(" \t\r\n");
+        size_t const first = token.find_first_not_of(" \t\r\n");
         if (first == std::string::npos)
             continue;
-        size_t last = token.find_last_not_of(" \t\r\n");
+        size_t const last = token.find_last_not_of(" \t\r\n");
         tokens.push_back(token.substr(first, last - first + 1));
     }
     return tokens;
 }
 
-std::vector<std::string> AutoBalanceConfig::SplitWhitespaceOrColon(std::string const& str)
+std::vector<std::string> AutoBalanceConfig::SplitWhitespace(std::string const& str)
 {
     std::vector<std::string> parts;
-    std::string copy = str;
-    // Replace any colon with space to allow unified stream reading
-    for (char& c : copy)
-    {
-        if (c == ':')
-            c = ' ';
-    }
-
-    std::stringstream ss(copy);
+    std::stringstream ss(str);
     std::string token;
     while (ss >> token)
     {
@@ -74,14 +65,14 @@ void AutoBalanceConfig::ParseIdList(std::string const& str, std::unordered_set<u
     if (str.empty())
         return;
 
-    std::vector<std::string> tokens = Tokenize(str, ',');
+    std::vector<std::string> const tokens = Tokenize(str, ',');
     for (std::string const& t : tokens)
     {
         if (t.empty())
             continue;
         try
         {
-            uint32 id = static_cast<uint32>(std::stoul(t));
+            uint32 const id = static_cast<uint32>(std::stoul(t));
             outSet.insert(id);
         }
         catch (...) {}
@@ -93,14 +84,14 @@ void AutoBalanceConfig::ParseForcedIdList(std::string const& str, int count, std
     if (str.empty())
         return;
 
-    std::vector<std::string> tokens = Tokenize(str, ',');
+    std::vector<std::string> const tokens = Tokenize(str, ',');
     for (std::string const& t : tokens)
     {
         if (t.empty())
             continue;
         try
         {
-            uint32 id = static_cast<uint32>(std::stoul(t));
+            uint32 const id = static_cast<uint32>(std::stoul(t));
             outMap[id] = count;
         }
         catch (...) {}
@@ -113,17 +104,17 @@ void AutoBalanceConfig::ParseMinPlayersList(std::string const& str, std::unorder
     if (str.empty())
         return;
 
-    std::vector<std::string> entries = Tokenize(str, ',');
+    std::vector<std::string> const entries = Tokenize(str, ',');
     for (std::string const& entry : entries)
     {
-        std::vector<std::string> parts = SplitWhitespaceOrColon(entry);
+        std::vector<std::string> const parts = SplitWhitespace(entry);
         if (parts.size() >= 2)
         {
             try
             {
-                uint32 mapId = static_cast<uint32>(std::stoul(parts[0]));
+                uint32 const mapId = static_cast<uint32>(std::stoul(parts[0]));
                 unsigned long const parsed = std::stoul(parts[1]);
-                uint8 minP = static_cast<uint8>(std::max(1ul, std::min(255ul, parsed)));
+                uint8 const minP = static_cast<uint8>(std::max(1ul, std::min(255ul, parsed)));
                 outMap[mapId] = minP;
             }
             catch (...) {}
@@ -137,27 +128,20 @@ void AutoBalanceConfig::ParseInflectionOverrides(std::string const& str, std::un
     if (str.empty())
         return;
 
-    std::vector<std::string> entries = Tokenize(str, ',');
+    std::vector<std::string> const entries = Tokenize(str, ',');
     for (std::string const& entry : entries)
     {
-        std::vector<std::string> parts = SplitWhitespaceOrColon(entry);
+        std::vector<std::string> const parts = SplitWhitespace(entry);
         if (parts.size() >= 4)
         {
             try
             {
-                uint32 mapId = static_cast<uint32>(std::stoul(parts[0]));
-                float val = std::stof(parts[1]);
-                float floor = std::stof(parts[2]);
-                float ceil = std::stof(parts[3]);
-                float bossMod = (parts.size() >= 5) ? std::stof(parts[4]) : 1.0f;
-
-                // Handle -1 fallback values
-                if (val < 0.0f) val = 0.5f;
-                if (floor < 0.0f) floor = 0.0f;
-                if (ceil < 0.0f) ceil = 1.0f;
-                if (bossMod < 0.0f) bossMod = 1.0f;
-
-                outMap[mapId] = AutoBalanceInflectionPointSettings(val, floor, ceil, bossMod);
+                uint32 const mapId = static_cast<uint32>(std::stoul(parts[0]));
+                float const val = std::stof(parts[1]);
+                float const floor = std::stof(parts[2]);
+                float const ceiling = std::stof(parts[3]);
+                float const bossMod = (parts.size() >= 5) ? std::stof(parts[4]) : 1.0f;
+                outMap[mapId] = AutoBalanceInflectionPointSettings(val, floor, ceiling, bossMod);
             }
             catch (...) {}
         }
@@ -170,22 +154,22 @@ void AutoBalanceConfig::ParseStatModifierOverrides(std::string const& str, std::
     if (str.empty())
         return;
 
-    std::vector<std::string> entries = Tokenize(str, ',');
+    std::vector<std::string> const entries = Tokenize(str, ',');
     for (std::string const& entry : entries)
     {
-        std::vector<std::string> parts = SplitWhitespaceOrColon(entry);
-        if (parts.size() >= 2)
+        std::vector<std::string> const parts = SplitWhitespace(entry);
+        if (parts.size() >= 7)
         {
             try
             {
-                uint32 id = static_cast<uint32>(std::stoul(parts[0]));
-                float g  = (parts.size() > 1 && parts[1] != "-1") ? std::stof(parts[1]) : 1.0f;
-                float h  = (parts.size() > 2 && parts[2] != "-1") ? std::stof(parts[2]) : 1.0f;
-                float m  = (parts.size() > 3 && parts[3] != "-1") ? std::stof(parts[3]) : 1.0f;
-                float a  = (parts.size() > 4 && parts[4] != "-1") ? std::stof(parts[4]) : 1.0f;
-                float d  = (parts.size() > 5 && parts[5] != "-1") ? std::stof(parts[5]) : 1.0f;
-                float cc = (parts.size() > 6 && parts[6] != "-1") ? std::stof(parts[6]) : 1.0f;
-                outMap[id] = AutoBalanceStatModifiers(g, h, m, a, d, cc);
+                uint32 const id = static_cast<uint32>(std::stoul(parts[0]));
+                float const global = std::stof(parts[1]);
+                float const health = std::stof(parts[2]);
+                float const mana = std::stof(parts[3]);
+                float const armor = std::stof(parts[4]);
+                float const damage = std::stof(parts[5]);
+                float const cc = std::stof(parts[6]);
+                outMap[id] = AutoBalanceStatModifiers(global, health, mana, armor, damage, cc);
             }
             catch (...) {}
         }
@@ -198,19 +182,19 @@ void AutoBalanceConfig::ParseDynamicLevelOverrides(std::string const& str, std::
     if (str.empty())
         return;
 
-    std::vector<std::string> entries = Tokenize(str, ',');
+    std::vector<std::string> const entries = Tokenize(str, ',');
     for (std::string const& entry : entries)
     {
-        std::vector<std::string> parts = SplitWhitespaceOrColon(entry);
-        if (parts.size() >= 2)
+        std::vector<std::string> const parts = SplitWhitespace(entry);
+        if (parts.size() >= 5)
         {
             try
             {
-                uint32 mapId = static_cast<uint32>(std::stoul(parts[0]));
-                int higher = (parts.size() > 1 && parts[1] != "-1") ? std::stoi(parts[1]) : 3;
-                int lower  = (parts.size() > 2 && parts[2] != "-1") ? std::stoi(parts[2]) : 5;
-                int ceil   = (parts.size() > 3 && parts[3] != "-1") ? std::stoi(parts[3]) : 1;
-                int flr    = (parts.size() > 4 && parts[4] != "-1") ? std::stoi(parts[4]) : 5;
+                uint32 const mapId = static_cast<uint32>(std::stoul(parts[0]));
+                int const higher = std::stoi(parts[1]);
+                int const lower  = std::stoi(parts[2]);
+                int const ceil   = std::stoi(parts[3]);
+                int const flr    = std::stoi(parts[4]);
                 outMap[mapId] = AutoBalanceDynamicLevelSettings(higher, lower, ceil, flr);
             }
             catch (...) {}
@@ -224,16 +208,16 @@ void AutoBalanceConfig::ParseDistanceCheckOverrides(std::string const& str, std:
     if (str.empty())
         return;
 
-    std::vector<std::string> entries = Tokenize(str, ',');
+    std::vector<std::string> const entries = Tokenize(str, ',');
     for (std::string const& entry : entries)
     {
-        std::vector<std::string> parts = SplitWhitespaceOrColon(entry);
+        std::vector<std::string> const parts = SplitWhitespace(entry);
         if (parts.size() >= 2)
         {
             try
             {
-                uint32 mapId = static_cast<uint32>(std::stoul(parts[0]));
-                uint32 dist  = static_cast<uint32>(std::stoul(parts[1]));
+                uint32 const mapId = static_cast<uint32>(std::stoul(parts[0]));
+                uint32 const dist  = static_cast<uint32>(std::stoul(parts[1]));
                 outMap[mapId] = dist;
             }
             catch (...) {}
@@ -243,10 +227,8 @@ void AutoBalanceConfig::ParseDistanceCheckOverrides(std::string const& str, std:
 
 void AutoBalanceConfig::Load()
 {
-    // Check AutoBalance.Enable.Global (or legacy TwowAutoBalance.Enable)
-    m_enableGlobal = sConfig.GetBoolDefault("AutoBalance.Enable.Global", false);
-    if (!m_enableGlobal)
-        m_enableGlobal = sConfig.GetBoolDefault("TwowAutoBalance.Enable", false);
+    // Clean default is enabled when omitted from loaded settings; modern 0 explicitly disables.
+    m_enableGlobal = sConfig.GetBoolDefault("AutoBalance.Enable.Global", true);
 
     m_enable5M = sConfig.GetBoolDefault("AutoBalance.Enable.5M", true);
     m_enable10M = sConfig.GetBoolDefault("AutoBalance.Enable.10M", true);
@@ -439,7 +421,7 @@ void AutoBalanceConfig::Load()
     );
 
     ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.PerInstance", ""), m_mapStatModifierOverrides);
-    ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.Boss.PerInstance", ""), m_mapBossStatModifierOverrides);
+    ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.Boss.PerInstance", ""), m_bossMapBossStatModifierOverrides);
     ParseStatModifierOverrides(sConfig.GetStringDefault("AutoBalance.StatModifier.PerCreature", ""), m_creatureStatModifierOverrides);
 
     // Multiplier Clamp Bounds
@@ -505,20 +487,15 @@ void AutoBalanceConfig::Load()
     m_countBots = sConfig.GetBoolDefault("AutoBalance.CountBots", true);
     m_botWeight = std::max(0.0f, sConfig.GetFloatDefault("AutoBalance.BotWeight", 1.0f));
 
-    // Special Entity Rules (1:1 upstream parity)
-    m_creatureIDsThatAreNotClones = { 16152 }; // Attumen the Huntsman combined form
+    // Special Entity Rules
     m_spellIdsToNeverModify = { 1177 }; // Twin Empathy (AQ40)
     m_spellIdsThatSpendPlayerHealth = {
         45529, 2687, 27869, 16666, 755, 3698, 3699, 3700, 11693, 11694, 11695,
         27259, 47856, 1454, 1455, 1456, 11687, 11688, 11689, 27222, 57946, 29858, 55213
     };
 
-    // Coexistence
-    m_coexistenceDisableCoreAutoScaler = sConfig.GetBoolDefault("AutoBalance.Coexistence.DisableCoreAutoScaler", true);
-
     m_configTimestamp = GetCurrentAutoBalanceConfigTime();
-    sLog.outString("[AutoBalance] Configuration loaded (Enabled: %s, Timestamp: %llu).",
-        m_enableGlobal ? "true" : "false", static_cast<unsigned long long>(m_configTimestamp));
+    sLog.outString("[AutoBalance] Configuration loaded (Enabled: %s).", m_enableGlobal ? "true" : "false");
 }
 
 void AutoBalanceConfig::Reload()
@@ -598,8 +575,8 @@ AutoBalanceStatModifiers const* AutoBalanceConfig::GetMapStatModifierOverride(ui
 {
     if (isBoss)
     {
-        auto itBoss = m_mapBossStatModifierOverrides.find(mapId);
-        if (itBoss != m_mapBossStatModifierOverrides.end())
+        auto itBoss = m_bossMapInflectionOverrides.find(mapId);
+        if (itBoss != m_bossMapInflectionOverrides.end())
             return &itBoss->second;
     }
 
@@ -650,11 +627,6 @@ uint32 AutoBalanceConfig::GetDistanceCheckOverride(uint32 mapId) const
     if (it != m_distanceCheckOverrides.end())
         return it->second;
     return 0;
-}
-
-bool AutoBalanceConfig::IsNotAClone(uint32 entry) const
-{
-    return m_creatureIDsThatAreNotClones.find(entry) != m_creatureIDsThatAreNotClones.end();
 }
 
 bool AutoBalanceConfig::IsSpellToNeverModify(uint32 spellId) const

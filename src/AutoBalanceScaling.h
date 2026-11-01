@@ -17,6 +17,7 @@ class Player;
 namespace AutoBalanceScaling
 {
     bool ShouldMapBeEnabled(Map* map);
+    uint32 GetMapBaseCapacity(Map* map);
     uint32 GetMapMaxPlayers(Map* map);
     bool IsMapRaidActive(Map* map);
 
@@ -30,7 +31,6 @@ namespace AutoBalanceScaling
 
     float GetDefaultMultiplier(uint32 maxPlayers, float adjustedPlayerCount, AutoBalanceInflectionPointSettings const& settings);
 
-    void LoadCreatureClassLevelStats();
     float GetClassLevelHealth(uint8 unitClass, uint8 level);
     float GetClassLevelDamage(uint8 unitClass, uint8 level);
     float GetClassLevelArmor(uint8 unitClass, uint8 level);

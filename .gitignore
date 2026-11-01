@@ -1,7 +1,12 @@
-# Documentation and internal planning files
-docs/
+# Workspace, agent, testing, and internal verification files (Local Only - Never Push to GitHub)
 AGENTS.md
+.agents/
 tests/
+t/
+test_*
+docs/
+!docs/images/
+!docs/images/**
 
 # Build artifacts and IDE files
 build/

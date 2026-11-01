@@ -29,11 +29,17 @@ public:
     void Initialize();
     void Reload();
     void ApplyMemoryMapLimits();
+    void ScheduleAllMapsRefresh();
 
+    uint32 GetNativeMapCapacity(uint32 mapId) const;
+
+    uint64 GetMapKey(Map* map) const;
     MapInfoPtr GetMapInfo(Map* map);
+    MapInfoPtr GetMapInfo(uint64 instanceKey);
     MapInfoPtr GetOrCreateMapInfo(Map* map);
 
-    CreatureInfoPtr GetCreatureInfo(ObjectGuid guid);
+    CreatureInfoPtr GetCreatureInfo(Creature* creature);
+    CreatureInfoPtr GetCreatureInfo(uint64 instanceKey, ObjectGuid guid);
     CreatureInfoPtr GetOrCreateCreatureInfo(Creature* creature);
 
     bool IsMapScaled(Map* map);
@@ -49,7 +55,8 @@ public:
     void OnCreatureRespawn(Creature* creature);
 
     void OnMapDestroy(Map* map);
-    void OnMapUpdate(Map* map);
+    void OnMapUpdate(Map* map, uint32 diff);
+    void PerformMapMaintenance(Map* map, AutoBalanceMapInfo& mapInfo);
 
     void OnUnitEnterCombat(Unit* unit, Unit* victim);
     void OnUnitExitCombat(Unit* unit);
@@ -63,11 +70,12 @@ public:
 private:
     AutoBalanceManager() = default;
 
-    uint32 GetMapKey(Map* map) const;
     void RefreshMapSettings(Map* map, AutoBalanceMapInfo& mapInfo);
 
-    std::unordered_map<uint32, MapInfoPtr> m_maps;
-    std::unordered_map<ObjectGuid, CreatureInfoPtr> m_creatures;
+    std::unordered_map<uint64, MapInfoPtr> m_maps;
+    std::unordered_map<AutoBalanceCreatureKey, CreatureInfoPtr, AutoBalanceCreatureKeyHash> m_creatures;
+    std::unordered_map<uint32, uint32> m_nativeMapCapacities;
+    bool m_nativeCapacitiesCaptured = false;
     mutable std::shared_mutex m_lock;
 };
 

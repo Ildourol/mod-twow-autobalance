@@ -28,7 +28,7 @@ AutoBalanceCommandScript::AutoBalanceCommandScript()
 
 bool AutoBalanceCommandScript::CanExecuteCommand(ChatHandler* handler, char const* cmd, char const* argsIn)
 {
-    if (!cmd)
+    if (!handler || !cmd)
         return true;
 
     if (strcmp(cmd, "ab") != 0 && strcmp(cmd, "autobalance") != 0)
@@ -40,7 +40,7 @@ bool AutoBalanceCommandScript::CanExecuteCommand(ChatHandler* handler, char cons
         size_t const b = rest.find_first_not_of(' ');
         if (b == std::string::npos) { rest.clear(); return std::string(); }
         size_t const e = rest.find(' ', b);
-        std::string word = rest.substr(b, e == std::string::npos ? std::string::npos : e - b);
+        std::string const word = rest.substr(b, e == std::string::npos ? std::string::npos : e - b);
         rest = e == std::string::npos ? std::string() : rest.substr(e + 1);
         return word;
     };
@@ -69,6 +69,9 @@ bool AutoBalanceCommandScript::CanExecuteCommand(ChatHandler* handler, char cons
 
 bool AutoBalanceCommandScript::HandleMapStat(ChatHandler* handler)
 {
+    if (!handler)
+        return true;
+
     Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
     if (!player)
     {
@@ -84,7 +87,7 @@ bool AutoBalanceCommandScript::HandleMapStat(ChatHandler* handler)
     }
 
     AutoBalanceManager::MapInfoPtr mapInfo = sAutoBalanceMgr.GetMapInfo(map);
-    uint32 maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
+    uint32 const maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
 
     handler->SendSysMessage(AutoBalanceFormatting::StringFormat("=== AutoBalance Map Stats: {} (Map ID: {}, Instance: {}) ===",
         map->GetMapName(), map->GetId(), map->GetInstanceId()).c_str());
@@ -120,6 +123,9 @@ bool AutoBalanceCommandScript::HandleMapStat(ChatHandler* handler)
 
 bool AutoBalanceCommandScript::HandleCreatureStat(ChatHandler* handler)
 {
+    if (!handler)
+        return true;
+
     Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
     if (!player)
     {
@@ -134,7 +140,7 @@ bool AutoBalanceCommandScript::HandleCreatureStat(ChatHandler* handler)
         return true;
     }
 
-    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(target->GetObjectGuid());
+    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(target);
 
     handler->SendSysMessage(AutoBalanceFormatting::StringFormat("=== AutoBalance Creature Stats: {} (Entry: {}, GUID: {}) ===",
         target->GetName(), target->GetEntry(), target->GetGUIDLow()).c_str());
@@ -175,14 +181,21 @@ bool AutoBalanceCommandScript::HandleCreatureStat(ChatHandler* handler)
 
 bool AutoBalanceCommandScript::HandleGetOffset(ChatHandler* handler)
 {
-    int8 offset = sABConfig.GetPlayerCountDifficultyOffset();
+    if (!handler)
+        return true;
+
+    int8 const offset = sABConfig.GetPlayerCountDifficultyOffset();
     handler->SendSysMessage(AutoBalanceFormatting::StringFormat("[AutoBalance] Current PlayerCountDifficultyOffset: {}", static_cast<int>(offset)).c_str());
     return true;
 }
 
 bool AutoBalanceCommandScript::HandleSetOffset(ChatHandler* handler, std::string const& args)
 {
-    if (handler->GetSession() && handler->GetSession()->GetSecurity() < SEC_GAMEMASTER)
+    if (!handler)
+        return true;
+
+    // SEC_DEVELOPER (3) is native rank for development/balancing commands
+    if (handler->GetSession() && handler->GetSession()->GetSecurity() < SEC_DEVELOPER)
     {
         handler->SendSysMessage("You do not have permission to execute this command.");
         return true;
@@ -205,39 +218,21 @@ bool AutoBalanceCommandScript::HandleSetOffset(ChatHandler* handler, std::string
         return true;
     }
 
-    int offset = static_cast<int>(std::max(-128L, std::min(127L, parsedOffset)));
+    int const offset = static_cast<int>(std::max(-128L, std::min(127L, parsedOffset)));
     sABConfig.SetPlayerCountDifficultyOffset(static_cast<int8>(offset));
-    handler->SendSysMessage(AutoBalanceFormatting::StringFormat("[AutoBalance] PlayerCountDifficultyOffset set to {}.", offset).c_str());
 
-    // Rescale current map if in dungeon
-    if (Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr)
-    {
-        Map* map = player->GetMap();
-        if (map && map->IsDungeon())
-        {
-            AutoBalanceManager::MapInfoPtr mapInfo = sAutoBalanceMgr.GetMapInfo(map);
-            if (mapInfo)
-            {
-                bool enabled = false;
-                {
-                    std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
-                    enabled = mapInfo->enabled;
-                }
-                if (enabled)
-                {
-                    sAutoBalanceMgr.UpdateMapPlayerCounts(map, *mapInfo);
-                    sAutoBalanceMgr.RescaleMapCreatures(map);
-                    handler->SendSysMessage("[AutoBalance] Current instance creatures rescaled.");
-                }
-            }
-        }
-    }
+    // Global offset: schedule refreshes on the owning map thread for all tracked instances
+    sAutoBalanceMgr.ScheduleAllMapsRefresh();
+    handler->SendSysMessage(AutoBalanceFormatting::StringFormat("[AutoBalance] PlayerCountDifficultyOffset set to {}. Scheduled instance refreshes.", offset).c_str());
 
     return true;
 }
 
 bool AutoBalanceCommandScript::HandleReload(ChatHandler* handler)
 {
+    if (!handler)
+        return true;
+
     if (handler->GetSession() && handler->GetSession()->GetSecurity() < SEC_ADMINISTRATOR)
     {
         handler->SendSysMessage("You do not have permission to execute this command.");
@@ -245,19 +240,20 @@ bool AutoBalanceCommandScript::HandleReload(ChatHandler* handler)
     }
 
     sWorld.LoadConfigSettings(true);
-    handler->SendSysMessage("[AutoBalance] Configuration reloaded successfully.");
+    handler->SendSysMessage("[AutoBalance] Native configuration reload requested.");
     return true;
 }
 
 bool AutoBalanceCommandScript::HandleInfo(ChatHandler* handler)
 {
+    if (!handler)
+        return true;
+
     handler->SendSysMessage("=== mod-twow-autobalance for TortoiseWoW / Turtle WoW ===");
     handler->SendSysMessage(AutoBalanceFormatting::StringFormat("Global State: {}", sABConfig.IsGlobalEnabled() ? "ENABLED" : "DISABLED").c_str());
     handler->SendSysMessage(AutoBalanceFormatting::StringFormat("Level Scaling: {} | Reward Scaling (XP/Money): {}/{}",
         sABConfig.IsLevelScalingEnabled() ? "ON" : "OFF",
         sABConfig.IsRewardScalingXPEnabled() ? "ON" : "OFF",
         sABConfig.IsRewardScalingMoneyEnabled() ? "ON" : "OFF").c_str());
-    handler->SendSysMessage(AutoBalanceFormatting::StringFormat("Core AutoScaler Coexistence Protection: {}",
-        sABConfig.IsCoexistenceDisableCoreAutoScaler() ? "ACTIVE" : "OFF").c_str());
     return true;
 }

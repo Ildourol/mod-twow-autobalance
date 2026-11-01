@@ -19,7 +19,10 @@
 // --- AutoBalanceWorldScript --------------------------------------------------
 
 AutoBalanceWorldScript::AutoBalanceWorldScript()
-    : WorldScript("AutoBalanceWorldScript")
+    : WorldScript("AutoBalanceWorldScript", {
+        WORLDHOOK_ON_STARTUP,
+        WORLDHOOK_ON_AFTER_CONFIG_LOAD
+    })
 {
 }
 
@@ -37,7 +40,13 @@ void AutoBalanceWorldScript::OnAfterConfigLoad(bool reload)
 // --- AutoBalancePlayerScript -------------------------------------------------
 
 AutoBalancePlayerScript::AutoBalancePlayerScript()
-    : PlayerScript("AutoBalancePlayerScript")
+    : PlayerScript("AutoBalancePlayerScript", {
+        PLAYERHOOK_ON_LOGIN,
+        PLAYERHOOK_ON_LEVEL_CHANGED,
+        PLAYERHOOK_ON_GIVE_EXP,
+        PLAYERHOOK_ON_MONEY_CHANGED,
+        PLAYERHOOK_ON_CREATURE_KILL
+    })
 {
 }
 
@@ -46,7 +55,6 @@ void AutoBalancePlayerScript::OnLogin(Player* player)
     if (!player || !sABConfig.IsAnnouncementEnabled())
         return;
 
-    // Headless PlayerBots suppression
     if (player->GetSession() && player->GetSession()->IsHeadless())
         return;
 
@@ -83,7 +91,7 @@ void AutoBalancePlayerScript::OnGiveXP(Player* player, uint32& amount, Unit* vic
     if (!mapInfo || !mapInfo->enabled)
         return;
 
-    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
     if (!cInfo)
         return;
 
@@ -97,10 +105,10 @@ void AutoBalancePlayerScript::OnGiveXP(Player* player, uint32& amount, Unit* vic
     }
     else if (sABConfig.GetRewardScalingMethod() == AUTOBALANCE_SCALING_FIXED)
     {
-        uint32 maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
+        uint32 const maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
         if (maxPlayers > 0)
         {
-            float ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
+            float const ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
             amount = static_cast<uint32>(std::round(static_cast<float>(amount) * cInfo->xpModifier * ratio));
         }
     }
@@ -123,11 +131,18 @@ void AutoBalancePlayerScript::OnMoneyChanged(Player* player, int32& amount)
     if (!mapInfo->enabled)
         return;
 
-    ObjectGuid lootGuid = player->GetLootGuid();
+    ObjectGuid const lootGuid = player->GetLootGuid();
     if (lootGuid.IsCreature())
     {
-        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(lootGuid);
-        float moneyMod = cInfo ? cInfo->moneyModifier : sABConfig.GetRewardScalingMoneyModifier();
+        uint64 const instanceKey = sAutoBalanceMgr.GetMapKey(map);
+        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(instanceKey, lootGuid);
+        float moneyMod = sABConfig.GetRewardScalingMoneyModifier();
+        if (cInfo)
+        {
+            std::lock_guard<std::recursive_mutex> creatureGuard(cInfo->stateLock);
+            if (cInfo->isActive)
+                moneyMod = cInfo->moneyModifier;
+        }
 
         if (sABConfig.GetRewardScalingMethod() == AUTOBALANCE_SCALING_DYNAMIC)
         {
@@ -135,21 +150,21 @@ void AutoBalancePlayerScript::OnMoneyChanged(Player* player, int32& amount)
         }
         else if (sABConfig.GetRewardScalingMethod() == AUTOBALANCE_SCALING_FIXED)
         {
-            uint32 maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
+            uint32 const maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
             if (maxPlayers > 0)
             {
-                float ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
+                float const ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
                 amount = static_cast<int32>(std::round(static_cast<float>(amount) * moneyMod * ratio));
             }
         }
     }
     else
     {
-        // For non-creature loot sources (chests, containers), distribute in Fixed mode based on player ratio
-        uint32 maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
+        // Container / non-creature loot distribution in Fixed mode
+        uint32 const maxPlayers = AutoBalanceScaling::GetMapMaxPlayers(map);
         if (maxPlayers > 0)
         {
-            float ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
+            float const ratio = static_cast<float>(mapInfo->playerCount) / static_cast<float>(maxPlayers);
             amount = static_cast<int32>(std::round(static_cast<float>(amount) * ratio));
         }
     }
@@ -195,13 +210,26 @@ void AutoBalancePlayerScript::OnCreatureKill(Player* killer, Creature* killed)
 // --- AutoBalanceUnitScript ---------------------------------------------------
 
 AutoBalanceUnitScript::AutoBalanceUnitScript()
-    : UnitScript("AutoBalanceUnitScript")
+    : UnitScript("AutoBalanceUnitScript", {
+        UNITHOOK_MODIFY_MELEE_DAMAGE,
+        UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN,
+        UNITHOOK_MODIFY_HEAL_RECEIVED,
+        UNITHOOK_ON_AURA_APPLY,
+        UNITHOOK_ON_UNIT_ENTER_COMBAT,
+        UNITHOOK_ON_UNIT_EXIT_COMBAT,
+        UNITHOOK_ON_UNIT_UPDATE,
+        UNITHOOK_ON_UNIT_DEATH
+    })
 {
 }
 
 void AutoBalanceUnitScript::ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage)
 {
     if (!target || !attacker || damage == 0)
+        return;
+
+    // Exclude players and player-owned attackers from PvE world-damage adjustment
+    if (attacker->IsPlayer() || (attacker->GetOwner() && attacker->GetOwner()->IsPlayer()))
         return;
 
     if (!target->IsPlayer() && !(target->IsPet() && target->GetOwner() && target->GetOwner()->IsPlayer()))
@@ -215,11 +243,11 @@ void AutoBalanceUnitScript::ModifyMeleeDamage(Unit* target, Unit* attacker, uint
     if (!mapInfo)
         return;
 
-    // Tracked creatures have their weapon damage adjusted directly in ApplyCreatureStats
+    // Tracked creatures have weapon damage adjusted directly in ApplyCreatureStats
     if (attacker->IsCreature())
     {
         Creature* creature = static_cast<Creature*>(attacker);
-        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
         if (cInfo)
         {
             std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
@@ -228,7 +256,7 @@ void AutoBalanceUnitScript::ModifyMeleeDamage(Unit* target, Unit* attacker, uint
         }
     }
 
-    // Untracked attacker (environmental effect, trap, untracked summon) striking a player or pet
+    // Untracked attacker (environmental hazard, trap, untracked summon) striking a player or pet
     std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
     if (!mapInfo->enabled)
         return;
@@ -241,6 +269,10 @@ void AutoBalanceUnitScript::ModifyMeleeDamage(Unit* target, Unit* attacker, uint
 void AutoBalanceUnitScript::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellEntry const* spellInfo)
 {
     if (!target || !attacker || damage <= 0)
+        return;
+
+    // Exclude players and player-owned attackers from PvE damage adjustment
+    if (attacker->IsPlayer() || (attacker->GetOwner() && attacker->GetOwner()->IsPlayer()))
         return;
 
     // Upstream exception checking
@@ -263,8 +295,6 @@ void AutoBalanceUnitScript::ModifySpellDamageTaken(Unit* target, Unit* attacker,
     if (!mapInfo)
         return;
 
-    // Upstream parity: spells dealing damage based on a percentage of player max health
-    // should not have level-scaling applied, only group player-count scaling.
     bool isPercentSpell = false;
     if (spellInfo)
     {
@@ -278,29 +308,37 @@ void AutoBalanceUnitScript::ModifySpellDamageTaken(Unit* target, Unit* attacker,
         }
     }
 
+    bool hasMultiplier = false;
     float mult = 1.0f;
+
     if (attacker->IsCreature())
     {
         Creature* creature = static_cast<Creature*>(attacker);
-        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+        AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
         if (cInfo)
         {
             std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
             if (cInfo->isActive)
+            {
                 mult = isPercentSpell ? cInfo->damageMultiplier : cInfo->scaledDamageMultiplier;
+                hasMultiplier = true;
+            }
         }
     }
 
-    // Fallback: if attacker is an environmental trap, GameObject, trigger, or untracked summon,
-    // use the map's calibrated world damage multiplier to prevent unscaled 1-shots.
-    if (mult == 1.0f)
+    // Explicitly distinguish tracked source from untracked source.
+    // A tracked multiplier of 1.0 must not select the unrelated world multiplier.
+    if (!hasMultiplier)
     {
         std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
         if (mapInfo->enabled)
+        {
             mult = isPercentSpell ? mapInfo->worldDamageMultiplier : mapInfo->scaledWorldDamageMultiplier;
+            hasMultiplier = true;
+        }
     }
 
-    if (mult != 1.0f)
+    if (hasMultiplier && mult != 1.0f)
         damage = std::max(1, static_cast<int32>(std::round(static_cast<float>(damage) * mult)));
 }
 
@@ -312,7 +350,6 @@ void AutoBalanceUnitScript::ModifyHealReceived(Unit* target, Unit* healer, uint3
     if (spellInfo && sABConfig.IsSpellToNeverModify(spellInfo->Id))
         return;
 
-    // Non-player dungeon source healing dungeon creatures
     if (!target->IsCreature() || healer->IsPlayer())
         return;
 
@@ -321,7 +358,7 @@ void AutoBalanceUnitScript::ModifyHealReceived(Unit* target, Unit* healer, uint3
     if (!map || !map->IsDungeon())
         return;
 
-    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
     if (cInfo)
     {
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
@@ -335,7 +372,6 @@ void AutoBalanceUnitScript::OnAuraApply(Unit* unit, Aura* aura)
     if (!unit || !aura)
         return;
 
-    // CC scaling on player from dungeon creature
     if (!unit->IsPlayer())
         return;
 
@@ -352,7 +388,7 @@ void AutoBalanceUnitScript::OnAuraApply(Unit* unit, Aura* aura)
     if (!map || !map->IsDungeon())
         return;
 
-    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
     if (!cInfo)
         return;
 
@@ -360,29 +396,28 @@ void AutoBalanceUnitScript::OnAuraApply(Unit* unit, Aura* aura)
     if (!cInfo->isActive || cInfo->ccDurationMultiplier == 1.0f)
         return;
 
-    // Check for crowd control mechanics
-    bool isCC = holder->HasMechanic(MECHANIC_CHARM) ||
-                holder->HasMechanic(MECHANIC_DISORIENTED) ||
-                holder->HasMechanic(MECHANIC_FEAR) ||
-                holder->HasMechanic(MECHANIC_ROOT) ||
-                holder->HasMechanic(MECHANIC_SILENCE) ||
-                holder->HasMechanic(MECHANIC_SLEEP) ||
-                holder->HasMechanic(MECHANIC_STUN) ||
-                holder->HasMechanic(MECHANIC_FREEZE) ||
-                holder->HasMechanic(MECHANIC_KNOCKOUT) ||
-                holder->HasMechanic(MECHANIC_POLYMORPH) ||
-                holder->HasMechanic(MECHANIC_BANISH) ||
-                holder->HasMechanic(MECHANIC_SHACKLE) ||
-                holder->HasMechanic(MECHANIC_HORROR);
+    bool const isCC = holder->HasMechanic(MECHANIC_CHARM) ||
+                      holder->HasMechanic(MECHANIC_DISORIENTED) ||
+                      holder->HasMechanic(MECHANIC_FEAR) ||
+                      holder->HasMechanic(MECHANIC_ROOT) ||
+                      holder->HasMechanic(MECHANIC_SILENCE) ||
+                      holder->HasMechanic(MECHANIC_SLEEP) ||
+                      holder->HasMechanic(MECHANIC_STUN) ||
+                      holder->HasMechanic(MECHANIC_FREEZE) ||
+                      holder->HasMechanic(MECHANIC_KNOCKOUT) ||
+                      holder->HasMechanic(MECHANIC_POLYMORPH) ||
+                      holder->HasMechanic(MECHANIC_BANISH) ||
+                      holder->HasMechanic(MECHANIC_SHACKLE) ||
+                      holder->HasMechanic(MECHANIC_HORROR);
 
     if (isCC && !holder->IsPermanent())
     {
-        int32 curDuration = holder->GetAuraDuration();
-        int32 maxDuration = holder->GetAuraMaxDuration();
+        int32 const curDuration = holder->GetAuraDuration();
+        int32 const maxDuration = holder->GetAuraMaxDuration();
         if (curDuration > 0)
         {
-            int32 newCur = static_cast<int32>(std::round(static_cast<float>(curDuration) * cInfo->ccDurationMultiplier));
-            int32 newMax = static_cast<int32>(std::round(static_cast<float>(maxDuration) * cInfo->ccDurationMultiplier));
+            int32 const newCur = static_cast<int32>(std::round(static_cast<float>(curDuration) * cInfo->ccDurationMultiplier));
+            int32 const newMax = static_cast<int32>(std::round(static_cast<float>(maxDuration) * cInfo->ccDurationMultiplier));
             holder->SetAuraDuration(std::max(1000, newCur));
             holder->SetAuraMaxDuration(std::max(1000, newMax));
         }
@@ -412,8 +447,7 @@ void AutoBalanceUnitScript::OnUnitUpdate(Unit* unit, uint32 /*diff*/)
     if (!creature->IsAlive())
         return;
 
-    // Check if creature was previously marked dead and has now respawned
-    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature->GetObjectGuid());
+    AutoBalanceManager::CreatureInfoPtr cInfo = sAutoBalanceMgr.GetCreatureInfo(creature);
     if (cInfo)
     {
         bool wasDead = false;
@@ -428,7 +462,6 @@ void AutoBalanceUnitScript::OnUnitUpdate(Unit* unit, uint32 /*diff*/)
         }
     }
 
-    // Lazy initialization on creature tick
     if (!sAutoBalanceMgr.IsCreatureScaled(creature))
         sAutoBalanceMgr.OnCreatureAdd(creature);
 }
@@ -463,7 +496,7 @@ void AutoBalanceAllMapScript::OnDestroyMap(Map* map)
     sAutoBalanceMgr.OnMapDestroy(map);
 }
 
-void AutoBalanceAllMapScript::OnMapUpdate(Map* map, uint32 /*diff*/)
+void AutoBalanceAllMapScript::OnMapUpdate(Map* map, uint32 diff)
 {
-    sAutoBalanceMgr.OnMapUpdate(map);
+    sAutoBalanceMgr.OnMapUpdate(map, diff);
 }

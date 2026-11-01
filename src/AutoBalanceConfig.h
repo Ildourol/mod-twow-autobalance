@@ -112,12 +112,8 @@ public:
     float GetBotWeight() const { return m_botWeight; }
 
     // Exceptions & Special Entity Tracking
-    bool IsNotAClone(uint32 entry) const;
     bool IsSpellToNeverModify(uint32 spellId) const;
     bool IsSpellThatSpendsPlayerHealth(uint32 spellId) const;
-
-    // Coexistence
-    bool IsCoexistenceDisableCoreAutoScaler() const { return m_coexistenceDisableCoreAutoScaler; }
 
     uint64_t GetConfigTimestamp() const { return m_configTimestamp; }
 
@@ -125,7 +121,7 @@ private:
     AutoBalanceConfig() = default;
 
     static std::vector<std::string> Tokenize(std::string const& str, char delimiter);
-    static std::vector<std::string> SplitWhitespaceOrColon(std::string const& str);
+    static std::vector<std::string> SplitWhitespace(std::string const& str);
     static void ParseIdList(std::string const& str, std::unordered_set<uint32>& outSet);
     static void ParseForcedIdList(std::string const& str, int count, std::unordered_map<uint32, int>& outMap);
     static void ParseMinPlayersList(std::string const& str, std::unordered_map<uint32, uint8>& outMap);
@@ -134,7 +130,7 @@ private:
     static void ParseDynamicLevelOverrides(std::string const& str, std::unordered_map<uint32, AutoBalanceDynamicLevelSettings>& outMap);
     static void ParseDistanceCheckOverrides(std::string const& str, std::unordered_map<uint32, uint32>& outMap);
 
-    bool m_enableGlobal = false;
+    bool m_enableGlobal = true;
     bool m_enable5M = true;
     bool m_enable10M = true;
     bool m_enable15M = true;
@@ -227,11 +223,8 @@ private:
     float m_botWeight = 1.0f;
 
     // Special entity rules
-    std::unordered_set<uint32> m_creatureIDsThatAreNotClones;
     std::unordered_set<uint32> m_spellIdsToNeverModify;
     std::unordered_set<uint32> m_spellIdsThatSpendPlayerHealth;
-
-    bool m_coexistenceDisableCoreAutoScaler = true;
 
     uint64_t m_configTimestamp = 1;
 };

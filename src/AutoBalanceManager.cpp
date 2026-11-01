@@ -32,11 +32,19 @@ AutoBalanceManager& AutoBalanceManager::Instance()
     return instance;
 }
 
-uint32 AutoBalanceManager::GetMapKey(Map* map) const
+uint32 AutoBalanceManager::GetNativeMapCapacity(uint32 mapId) const
+{
+    auto it = m_nativeMapCapacities.find(mapId);
+    if (it != m_nativeMapCapacities.end())
+        return it->second;
+    return 0;
+}
+
+uint64 AutoBalanceManager::GetMapKey(Map* map) const
 {
     if (!map)
         return 0;
-    return map->IsDungeon() ? map->GetInstanceId() : map->GetId();
+    return MakeAutoBalanceInstanceKey(map->GetId(), map->GetInstanceId());
 }
 
 void AutoBalanceManager::RefreshMapSettings(Map* map, AutoBalanceMapInfo& mapInfo)
@@ -74,17 +82,20 @@ void AutoBalanceManager::RefreshMapSettings(Map* map, AutoBalanceMapInfo& mapInf
 
 void AutoBalanceManager::ApplyMemoryMapLimits()
 {
-    if (!sABConfig.IsGlobalEnabled())
-        return;
-
     uint32 count = 0;
     for (auto itr = sMapStorage.begin<MapEntry>(); itr < sMapStorage.end<MapEntry>(); ++itr)
     {
         MapEntry* entry = const_cast<MapEntry*>(*itr);
-        if (!entry)
+        if (!entry || !entry->IsDungeon())
             continue;
 
-        if (entry->IsDungeon())
+        uint32 const mapId = entry->id;
+        uint32 nativeCap = 5;
+        auto itNative = m_nativeMapCapacities.find(mapId);
+        if (itNative != m_nativeMapCapacities.end())
+            nativeCap = itNative->second;
+
+        if (sABConfig.IsGlobalEnabled() && !sABConfig.IsDungeonDisabled(mapId))
         {
             if (entry->IsRaid())
                 entry->maxPlayers = sABConfig.GetRaidPlayerLimitMax();
@@ -92,41 +103,54 @@ void AutoBalanceManager::ApplyMemoryMapLimits()
                 entry->maxPlayers = sABConfig.GetDungeonPlayerLimitMax();
             ++count;
         }
+        else
+        {
+            // When globally disabled or map explicitly excluded, release module-owned entrance override
+            entry->maxPlayers = nativeCap;
+        }
     }
 
-    sLog.outString("[AutoBalance] Updated %u instance player limits in memory (Dungeons Max: %u, Raids Max: %u).",
-        count, sABConfig.GetDungeonPlayerLimitMax(), sABConfig.GetRaidPlayerLimitMax());
+    if (sABConfig.IsGlobalEnabled())
+    {
+        sLog.outString("[AutoBalance] Applied in-memory instance entrance limits to %u dungeons/raids (Dungeons Max: %u, Raids Max: %u).",
+            count, sABConfig.GetDungeonPlayerLimitMax(), sABConfig.GetRaidPlayerLimitMax());
+    }
 }
 
 void AutoBalanceManager::Initialize()
 {
+    // Capture boot's native map capacities once before applying entrance overrides
+    if (!m_nativeCapacitiesCaptured)
+    {
+        for (auto itr = sMapStorage.begin<MapEntry>(); itr < sMapStorage.end<MapEntry>(); ++itr)
+        {
+            MapEntry* entry = const_cast<MapEntry*>(*itr);
+            if (entry && entry->IsDungeon())
+                m_nativeMapCapacities[entry->id] = entry->maxPlayers;
+        }
+        m_nativeCapacitiesCaptured = true;
+    }
+
     sABConfig.Load();
-    AutoBalanceScaling::LoadCreatureClassLevelStats();
     ApplyMemoryMapLimits();
 }
 
 void AutoBalanceManager::Reload()
 {
     sABConfig.Reload();
-    AutoBalanceScaling::LoadCreatureClassLevelStats();
     ApplyMemoryMapLimits();
+    ScheduleAllMapsRefresh();
+}
 
-    std::vector<MapInfoPtr> maps;
+void AutoBalanceManager::ScheduleAllMapsRefresh()
+{
+    std::shared_lock<std::shared_mutex> guard(m_lock);
+    for (auto const& pair : m_maps)
     {
-        std::shared_lock<std::shared_mutex> guard(m_lock);
-        maps.reserve(m_maps.size());
-        for (auto const& pair : m_maps)
-            maps.push_back(pair.second);
-    }
-
-    // Actual map traversal is deferred to OnMapUpdate so it runs on the
-    // owning map-update thread rather than the world/config thread.
-    for (MapInfoPtr const& mapInfo : maps)
-    {
-        if (mapInfo)
+        if (pair.second)
         {
-            std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
-            mapInfo->configPending = true;
+            std::lock_guard<std::recursive_mutex> mapGuard(pair.second->stateLock);
+            pair.second->configPending = true;
         }
     }
 }
@@ -135,9 +159,13 @@ AutoBalanceManager::MapInfoPtr AutoBalanceManager::GetMapInfo(Map* map)
 {
     if (!map)
         return MapInfoPtr();
+    return GetMapInfo(GetMapKey(map));
+}
 
+AutoBalanceManager::MapInfoPtr AutoBalanceManager::GetMapInfo(uint64 instanceKey)
+{
     std::shared_lock<std::shared_mutex> guard(m_lock);
-    auto it = m_maps.find(GetMapKey(map));
+    auto it = m_maps.find(instanceKey);
     return it != m_maps.end() ? it->second : MapInfoPtr();
 }
 
@@ -146,21 +174,31 @@ AutoBalanceManager::MapInfoPtr AutoBalanceManager::GetOrCreateMapInfo(Map* map)
     if (!map)
         return MapInfoPtr();
 
-    if (MapInfoPtr existing = GetMapInfo(map))
+    uint64 const instanceKey = GetMapKey(map);
+    if (MapInfoPtr existing = GetMapInfo(instanceKey))
         return existing;
 
     MapInfoPtr created = std::make_shared<AutoBalanceMapInfo>();
+    created->instanceKey = instanceKey;
     RefreshMapSettings(map, *created);
 
     std::unique_lock<std::shared_mutex> guard(m_lock);
-    auto result = m_maps.emplace(GetMapKey(map), created);
+    auto result = m_maps.emplace(instanceKey, created);
     return result.first->second;
 }
 
-AutoBalanceManager::CreatureInfoPtr AutoBalanceManager::GetCreatureInfo(ObjectGuid guid)
+AutoBalanceManager::CreatureInfoPtr AutoBalanceManager::GetCreatureInfo(Creature* creature)
 {
+    if (!creature)
+        return CreatureInfoPtr();
+    return GetCreatureInfo(GetMapKey(creature->GetMap()), creature->GetObjectGuid());
+}
+
+AutoBalanceManager::CreatureInfoPtr AutoBalanceManager::GetCreatureInfo(uint64 instanceKey, ObjectGuid guid)
+{
+    AutoBalanceCreatureKey const key{ instanceKey, guid };
     std::shared_lock<std::shared_mutex> guard(m_lock);
-    auto it = m_creatures.find(guid);
+    auto it = m_creatures.find(key);
     return it != m_creatures.end() ? it->second : CreatureInfoPtr();
 }
 
@@ -169,14 +207,29 @@ AutoBalanceManager::CreatureInfoPtr AutoBalanceManager::GetOrCreateCreatureInfo(
     if (!creature)
         return CreatureInfoPtr();
 
+    uint64 const instanceKey = GetMapKey(creature->GetMap());
     ObjectGuid const guid = creature->GetObjectGuid();
-    if (CreatureInfoPtr existing = GetCreatureInfo(guid))
-        return existing;
+    AutoBalanceCreatureKey const key{ instanceKey, guid };
+
+    {
+        std::shared_lock<std::shared_mutex> guard(m_lock);
+        auto it = m_creatures.find(key);
+        if (it != m_creatures.end())
+        {
+            CreatureInfoPtr existing = it->second;
+            // Check captured creature identity: if entry doesn't match, GUID was reused for a different creature
+            if (existing && existing->entry == creature->GetEntry())
+                return existing;
+        }
+    }
 
     CreatureInfoPtr created = std::make_shared<AutoBalanceCreatureInfo>();
+    created->instanceKey = instanceKey;
+    created->entry = creature->GetEntry();
+
     std::unique_lock<std::shared_mutex> guard(m_lock);
-    auto result = m_creatures.emplace(guid, created);
-    return result.first->second;
+    m_creatures[key] = created;
+    return created;
 }
 
 bool AutoBalanceManager::IsMapScaled(Map* map)
@@ -198,7 +251,7 @@ bool AutoBalanceManager::IsCreatureScaled(Creature* creature)
     if (!creature || !sABConfig.IsGlobalEnabled())
         return false;
 
-    if (CreatureInfoPtr cInfo = GetCreatureInfo(creature->GetObjectGuid()))
+    if (CreatureInfoPtr cInfo = GetCreatureInfo(creature))
     {
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
         return cInfo->isActive;
@@ -224,7 +277,6 @@ void AutoBalanceManager::UpdateMapPlayerCounts(Map* map, AutoBalanceMapInfo& map
     {
         if (Player* player = ref.getSource())
         {
-            // vMaNGOS fires OnPlayerLeaveAll before unlinking this player.
             if (player == excludedPlayer)
                 continue;
 
@@ -239,8 +291,7 @@ void AutoBalanceManager::UpdateMapPlayerCounts(Map* map, AutoBalanceMapInfo& map
             if (level > highestLvl)
                 highestLvl = level;
 
-            // PlayerBots (TortoiseBots) weight adjustment
-            bool isBot = (player->GetSession() && player->GetSession()->IsHeadless());
+            bool const isBot = (player->GetSession() && player->GetSession()->IsHeadless());
             if (isBot)
             {
                 if (sABConfig.IsCountBotsEnabled())
@@ -253,8 +304,6 @@ void AutoBalanceManager::UpdateMapPlayerCounts(Map* map, AutoBalanceMapInfo& map
         }
     }
 
-    // Upstream parity: if all present players are GMs (count == 0), derive level baseline from
-    // present players so instance level scaling does not collapse to 0.
     if (highestLvl == 0)
     {
         for (const auto& ref : map->GetPlayers())
@@ -293,7 +342,6 @@ void AutoBalanceManager::UpdateMapPlayerCounts(Map* map, AutoBalanceMapInfo& map
             mapInfo.highestPlayerLevel, effective, static_cast<uint32>(mapInfo.adjustedPlayerCount));
     }
 
-    // Compute fallback world multipliers for environmental effects, traps, and non-tracked spawns
     AutoBalanceInflectionPointSettings const inflection = AutoBalanceScaling::GetInflectionPointSettings(map, false);
     AutoBalanceStatModifiers const statMod = AutoBalanceScaling::GetStatModifiers(map, nullptr, false);
     float const defaultMult = AutoBalanceScaling::GetDefaultMultiplier(maxPlayers, adjusted, inflection);
@@ -332,7 +380,6 @@ void AutoBalanceManager::SendNotification(Map* map, std::string const& message)
     {
         if (Player* player = ref.getSource())
         {
-            // Suppress chat system messages for headless PlayerBots sessions
             if (player->GetSession() && player->GetSession()->IsHeadless())
                 continue;
 
@@ -350,31 +397,31 @@ void AutoBalanceManager::RescaleMapCreatures(Map* map)
     if (!mapInfo)
         return;
 
-    std::lock_guard<std::recursive_mutex> mapGuard(mapInfo->stateLock);
-    if (!mapInfo->enabled)
-        return;
-
-    std::vector<ObjectGuid> creatureGuids(mapInfo->creatures.begin(), mapInfo->creatures.end());
-    if (sABConfig.IsDebugLoggingEnabled())
+    std::vector<ObjectGuid> allGuids;
     {
-        sLog.outString("[AutoBalance] Rescaling %u creatures on map %u (%s) for %u player(s).",
-            static_cast<uint32>(creatureGuids.size()), map->GetId(), map->GetMapName(),
-            static_cast<uint32>(mapInfo->adjustedPlayerCount));
+        std::lock_guard<std::recursive_mutex> mapGuard(mapInfo->stateLock);
+        if (!mapInfo->enabled)
+            return;
+
+        allGuids.assign(mapInfo->creatures.begin(), mapInfo->creatures.end());
+        allGuids.insert(allGuids.end(), mapInfo->summons.begin(), mapInfo->summons.end());
     }
 
+    uint64 const instanceKey = GetMapKey(map);
     bool deferred = false;
-    for (ObjectGuid const& guid : creatureGuids)
+    for (ObjectGuid const& guid : allGuids)
     {
         Creature* creature = map->GetCreature(guid);
         if (!creature || !creature->IsAlive())
             continue;
+
         if (creature->IsInCombat())
         {
             deferred = true;
             continue;
         }
 
-        CreatureInfoPtr cInfo = GetCreatureInfo(guid);
+        CreatureInfoPtr cInfo = GetCreatureInfo(instanceKey, guid);
         if (!AutoBalanceScaling::IsCreatureRelevant(creature))
         {
             if (cInfo)
@@ -394,6 +441,8 @@ void AutoBalanceManager::RescaleMapCreatures(Map* map)
         AutoBalanceScaling::CalculateMultipliers(map, creature, *mapInfo, *cInfo);
         AutoBalanceScaling::ApplyCreatureStats(creature, *cInfo);
     }
+
+    std::lock_guard<std::recursive_mutex> mapGuard(mapInfo->stateLock);
     mapInfo->pendingRescale = deferred;
 }
 
@@ -406,21 +455,39 @@ void AutoBalanceManager::RestoreMapCreatures(Map* map)
     if (!mapInfo)
         return;
 
-    std::vector<ObjectGuid> creatureGuids;
+    std::vector<ObjectGuid> allGuids;
     {
         std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
-        creatureGuids.assign(mapInfo->creatures.begin(), mapInfo->creatures.end());
+        allGuids.assign(mapInfo->creatures.begin(), mapInfo->creatures.end());
+        allGuids.insert(allGuids.end(), mapInfo->summons.begin(), mapInfo->summons.end());
     }
 
-    for (ObjectGuid const& guid : creatureGuids)
+    uint64 const instanceKey = GetMapKey(map);
+    bool deferred = false;
+    for (ObjectGuid const& guid : allGuids)
     {
         Creature* creature = map->GetCreature(guid);
-        CreatureInfoPtr cInfo = GetCreatureInfo(guid);
+        CreatureInfoPtr cInfo = GetCreatureInfo(instanceKey, guid);
         if (!creature || !cInfo)
             continue;
 
+        if (creature->IsInCombat())
+        {
+            deferred = true;
+            continue;
+        }
+
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
         AutoBalanceScaling::RestoreCreatureStats(creature, *cInfo);
+    }
+
+    std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
+    mapInfo->pendingRestore = deferred;
+    if (!deferred)
+    {
+        mapInfo->combatLocked = false;
+        mapInfo->combatLockTripped = false;
+        mapInfo->combatLockMinPlayers = 0;
     }
 }
 
@@ -473,32 +540,26 @@ void AutoBalanceManager::OnPlayerEnter(Map* map, Player* player)
         for (const auto& ref : map->GetPlayers())
         {
             Player* thisPlayer = ref.getSource();
-            if (!thisPlayer)
+            if (!thisPlayer || (thisPlayer->GetSession() && thisPlayer->GetSession()->IsHeadless()))
                 continue;
 
-            // Suppress chat system messages for headless PlayerBots sessions
-            if (thisPlayer->GetSession() && thisPlayer->GetSession()->IsHeadless())
-                continue;
+            LocaleConstant const loc = thisPlayer->GetSession() ? thisPlayer->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
 
-            LocaleConstant loc = thisPlayer->GetSession() ? thisPlayer->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
-
-            if (thisPlayer == player) // This is the player that entered
+            if (thisPlayer == player)
             {
                 std::string const welcomeTemplate = ABGetLocaleText(loc, "welcome_to_player");
                 std::string const welcomeMsg = AutoBalanceFormatting::StringFormat(
                     welcomeTemplate, mapName, maxPlayers, difficulty, playerCount, adjustedCount);
                 ChatHandler(thisPlayer).SendSysMessage(welcomeMsg.c_str());
 
-                // Notify GMs that they won't be accounted for
                 if (player->IsGameMaster() && !sABConfig.IsCountGameMastersEnabled())
                 {
                     std::string const gmMsg = ABGetLocaleText(loc, "welcome_to_gm");
                     ChatHandler(thisPlayer).SendSysMessage(gmMsg.c_str());
                 }
             }
-            else // Existing player in dungeon
+            else
             {
-                // Announce non-GMs entering the instance only
                 if (!player->IsGameMaster() || sABConfig.IsCountGameMastersEnabled())
                 {
                     std::string const announceTemplate = ABGetLocaleText(loc, "announce_non_gm_entering_instance");
@@ -517,14 +578,7 @@ void AutoBalanceManager::OnPlayerLeave(Map* map, Player* player)
         return;
 
     if (player->IsGameMaster() && !sABConfig.IsCountGameMastersEnabled())
-    {
-        if (sABConfig.IsDebugLoggingEnabled())
-        {
-            sLog.outString("[AutoBalance] Player %s (GM) left map %u (%s).",
-                player->GetName(), map->GetId(), map->GetMapName());
-        }
         return;
-    }
 
     MapInfoPtr mapInfo = GetMapInfo(map);
     if (!mapInfo)
@@ -541,6 +595,8 @@ void AutoBalanceManager::OnPlayerLeave(Map* map, Player* player)
         changed = (mapInfo->playerCount != oldCount) || (mapInfo->adjustedPlayerCount != oldAdjusted);
         if (changed)
             mapInfo->mapConfigTime = GetCurrentAutoBalanceConfigTime();
+        // Request post-unlink refresh on the map thread
+        mapInfo->playerUnlinkPending = true;
     }
 
     if (sABConfig.IsDebugLoggingEnabled())
@@ -565,32 +621,25 @@ void AutoBalanceManager::OnPlayerLeave(Map* map, Player* player)
             combatLocked = mapInfo->combatLocked;
         }
 
-        // Notify remaining players in the instance that a player left
         if (!player->IsGameMaster() && playerCount > 0)
         {
             for (const auto& ref : map->GetPlayers())
             {
                 Player* thisPlayer = ref.getSource();
-                if (!thisPlayer || thisPlayer == player)
+                if (!thisPlayer || thisPlayer == player || (thisPlayer->GetSession() && thisPlayer->GetSession()->IsHeadless()))
                     continue;
 
-                // Suppress chat system messages for headless PlayerBots sessions
-                if (thisPlayer->GetSession() && thisPlayer->GetSession()->IsHeadless())
-                    continue;
-
-                LocaleConstant loc = thisPlayer->GetSession() ? thisPlayer->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
+                LocaleConstant const loc = thisPlayer->GetSession() ? thisPlayer->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
                 std::string leaveMsg;
                 if (combatLocked)
                 {
                     std::string const leaveTemplate = ABGetLocaleText(loc, "leaving_instance_combat");
-                    leaveMsg = AutoBalanceFormatting::StringFormat(
-                        leaveTemplate, player->GetName(), adjustedCount);
+                    leaveMsg = AutoBalanceFormatting::StringFormat(leaveTemplate, player->GetName(), adjustedCount);
                 }
                 else
                 {
                     std::string const leaveTemplate = ABGetLocaleText(loc, "leaving_instance");
-                    leaveMsg = AutoBalanceFormatting::StringFormat(
-                        leaveTemplate, player->GetName(), playerCount, adjustedCount);
+                    leaveMsg = AutoBalanceFormatting::StringFormat(leaveTemplate, player->GetName(), playerCount, adjustedCount);
                 }
 
                 ChatHandler(thisPlayer).SendSysMessage(leaveMsg.c_str());
@@ -693,13 +742,6 @@ void AutoBalanceManager::OnCreatureAdd(Creature* creature)
             AutoBalanceScaling::CalculateMultipliers(map, creature, *mapInfo, *cInfo);
             AutoBalanceScaling::ApplyCreatureStats(creature, *cInfo);
 
-            if (sABConfig.IsDebugLoggingEnabled())
-            {
-                sLog.outString("[AutoBalance] Scaled creature %u (%s) on map %u for %u player(s): HP x%.3f, Dmg x%.3f, Lvl %u.",
-                    creature->GetEntry(), creature->GetName(), map->GetId(), static_cast<uint32>(mapInfo->adjustedPlayerCount),
-                    cInfo->scaledHealthMultiplier, cInfo->scaledDamageMultiplier, creature->GetLevel());
-            }
-
             if (creatureBoundsChanged && sABConfig.IsLevelScalingEnabled() && mapInfo->creatures.size() > 1)
             {
                 mapInfo->mapConfigTime = GetCurrentAutoBalanceConfigTime();
@@ -708,17 +750,11 @@ void AutoBalanceManager::OnCreatureAdd(Creature* creature)
         }
         else
         {
-            // Upstream parity: temporary summons scale with their summoner/instance stats,
-            // but must not contaminate map creature bounds, averages, or trigger instance rescale storms.
+            // Summons scale from their own captured native stats without altering map bounds or averages
+            cInfo->isTemporarySummon = true;
+            mapInfo->summons.insert(creature->GetObjectGuid());
             AutoBalanceScaling::CalculateMultipliers(map, creature, *mapInfo, *cInfo);
             AutoBalanceScaling::ApplyCreatureStats(creature, *cInfo);
-
-            if (sABConfig.IsDebugLoggingEnabled())
-            {
-                sLog.outString("[AutoBalance] Scaled temporary summon %u (%s) on map %u for %u player(s): HP x%.3f, Dmg x%.3f, Lvl %u.",
-                    creature->GetEntry(), creature->GetName(), map->GetId(), static_cast<uint32>(mapInfo->adjustedPlayerCount),
-                    cInfo->scaledHealthMultiplier, cInfo->scaledDamageMultiplier, creature->GetLevel());
-            }
         }
     }
 }
@@ -728,8 +764,10 @@ void AutoBalanceManager::OnCreatureRemove(Creature* creature)
     if (!creature)
         return;
 
+    uint64 const instanceKey = GetMapKey(creature->GetMap());
     ObjectGuid const guid = creature->GetObjectGuid();
-    if (CreatureInfoPtr cInfo = GetCreatureInfo(guid))
+
+    if (CreatureInfoPtr cInfo = GetCreatureInfo(instanceKey, guid))
     {
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
         AutoBalanceScaling::RestoreCreatureStats(creature, *cInfo);
@@ -741,12 +779,14 @@ void AutoBalanceManager::OnCreatureRemove(Creature* creature)
         {
             std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
             mapInfo->creatures.erase(guid);
+            mapInfo->summons.erase(guid);
             mapInfo->activeCreatureCount = static_cast<uint32>(mapInfo->creatures.size());
         }
     }
 
+    AutoBalanceCreatureKey const key{ instanceKey, guid };
     std::unique_lock<std::shared_mutex> guard(m_lock);
-    m_creatures.erase(guid);
+    m_creatures.erase(key);
 }
 
 void AutoBalanceManager::OnCreatureDeath(Creature* creature)
@@ -754,8 +794,7 @@ void AutoBalanceManager::OnCreatureDeath(Creature* creature)
     if (!creature)
         return;
 
-    ObjectGuid const guid = creature->GetObjectGuid();
-    if (CreatureInfoPtr cInfo = GetCreatureInfo(guid))
+    if (CreatureInfoPtr cInfo = GetCreatureInfo(creature))
     {
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
         cInfo->wasAliveNowDead = true;
@@ -767,19 +806,12 @@ void AutoBalanceManager::OnCreatureRespawn(Creature* creature)
     if (!creature)
         return;
 
-    // SelectLevel has restored a fresh base roll. Discard old capture.
-    if (CreatureInfoPtr cInfo = GetCreatureInfo(creature->GetObjectGuid()))
+    if (CreatureInfoPtr cInfo = GetCreatureInfo(creature))
     {
         std::lock_guard<std::recursive_mutex> guard(cInfo->stateLock);
         cInfo->baseData = CreatureBaseData();
         cInfo->isActive = false;
         cInfo->wasAliveNowDead = false;
-    }
-
-    if (sABConfig.IsDebugLoggingEnabled())
-    {
-        sLog.outString("[AutoBalance] Respawned creature %u (%s) on map %u - re-applying scaled stats.",
-            creature->GetEntry(), creature->GetName(), creature->GetMapId());
     }
 
     OnCreatureAdd(creature);
@@ -790,29 +822,114 @@ void AutoBalanceManager::OnMapDestroy(Map* map)
     if (!map)
         return;
 
+    uint64 const instanceKey = GetMapKey(map);
     MapInfoPtr mapInfo;
     {
         std::unique_lock<std::shared_mutex> guard(m_lock);
-        auto it = m_maps.find(GetMapKey(map));
+        auto it = m_maps.find(instanceKey);
         if (it == m_maps.end())
             return;
         mapInfo = it->second;
         m_maps.erase(it);
     }
 
-    std::vector<ObjectGuid> creatureGuids;
+    std::vector<ObjectGuid> allGuids;
     {
         std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
-        creatureGuids.assign(mapInfo->creatures.begin(), mapInfo->creatures.end());
+        allGuids.assign(mapInfo->creatures.begin(), mapInfo->creatures.end());
+        allGuids.insert(allGuids.end(), mapInfo->summons.begin(), mapInfo->summons.end());
         mapInfo->creatures.clear();
+        mapInfo->summons.clear();
     }
 
     std::unique_lock<std::shared_mutex> guard(m_lock);
-    for (ObjectGuid const& guid : creatureGuids)
-        m_creatures.erase(guid);
+    for (ObjectGuid const& guid : allGuids)
+    {
+        AutoBalanceCreatureKey const key{ instanceKey, guid };
+        m_creatures.erase(key);
+    }
 }
 
-void AutoBalanceManager::OnMapUpdate(Map* map)
+void AutoBalanceManager::PerformMapMaintenance(Map* map, AutoBalanceMapInfo& mapInfo)
+{
+    if (!map)
+        return;
+
+    std::vector<ObjectGuid> retiredCreatures;
+    std::vector<ObjectGuid> retiredSummons;
+
+    {
+        std::lock_guard<std::recursive_mutex> guard(mapInfo.stateLock);
+        for (ObjectGuid const& guid : mapInfo.creatures)
+        {
+            Creature* c = map->GetCreature(guid);
+            if (!c || !c->IsInWorld())
+                retiredCreatures.push_back(guid);
+        }
+        for (ObjectGuid const& guid : mapInfo.summons)
+        {
+            Creature* c = map->GetCreature(guid);
+            if (!c || !c->IsInWorld())
+                retiredSummons.push_back(guid);
+        }
+
+        for (ObjectGuid const& guid : retiredCreatures)
+            mapInfo.creatures.erase(guid);
+        for (ObjectGuid const& guid : retiredSummons)
+            mapInfo.summons.erase(guid);
+
+        mapInfo.activeCreatureCount = static_cast<uint32>(mapInfo.creatures.size());
+
+        if (!retiredCreatures.empty())
+        {
+            // Recompute level bounds and average from remaining active normal creatures
+            uint8 lowest = 255;
+            uint8 highest = 0;
+            double sumLevels = 0.0;
+            uint32 counted = 0;
+
+            for (ObjectGuid const& guid : mapInfo.creatures)
+            {
+                Creature* c = map->GetCreature(guid);
+                if (c && c->IsAlive())
+                {
+                    uint8 const lvl = c->GetLevel();
+                    if (lvl < lowest)
+                        lowest = lvl;
+                    if (lvl > highest)
+                        highest = lvl;
+                    sumLevels += lvl;
+                    ++counted;
+                }
+            }
+
+            if (counted > 0)
+            {
+                mapInfo.lowestCreatureLevel = lowest;
+                mapInfo.highestCreatureLevel = highest;
+                mapInfo.avgCreatureLevel = static_cast<float>(sumLevels / counted);
+            }
+            else
+            {
+                mapInfo.lowestCreatureLevel = 0;
+                mapInfo.highestCreatureLevel = 0;
+                mapInfo.avgCreatureLevel = 0.0f;
+            }
+        }
+    }
+
+    if (!retiredCreatures.empty() || !retiredSummons.empty())
+    {
+        uint64 const instanceKey = GetMapKey(map);
+        std::unique_lock<std::shared_mutex> guard(m_lock);
+        for (ObjectGuid const& guid : retiredCreatures)
+            m_creatures.erase(AutoBalanceCreatureKey{ instanceKey, guid });
+        for (ObjectGuid const& guid : retiredSummons)
+            m_creatures.erase(AutoBalanceCreatureKey{ instanceKey, guid });
+    }
+}
+
+void AutoBalanceManager::OnMapUpdate(Map* map, uint32 diff)
 {
     if (!map || !map->IsDungeon())
         return;
@@ -821,21 +938,47 @@ void AutoBalanceManager::OnMapUpdate(Map* map)
     if (!mapInfo)
         return;
 
-    bool enabled = false;
+    bool needsRescale = false;
+    bool needsRestore = false;
+
     {
         std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
-        if (!mapInfo->configPending)
-            return;
 
-        RefreshMapSettings(map, *mapInfo);
-        mapInfo->configPending = false;
-        enabled = mapInfo->enabled;
+        if (mapInfo->playerUnlinkPending)
+        {
+            mapInfo->playerUnlinkPending = false;
+            uint8 const oldCount = mapInfo->playerCount;
+            uint8 const oldAdjusted = mapInfo->adjustedPlayerCount;
+            UpdateMapPlayerCounts(map, *mapInfo);
+            if ((mapInfo->playerCount != oldCount) || (mapInfo->adjustedPlayerCount != oldAdjusted))
+            {
+                mapInfo->mapConfigTime = GetCurrentAutoBalanceConfigTime();
+                needsRescale = true;
+            }
+        }
+
+        if (mapInfo->configPending)
+        {
+            RefreshMapSettings(map, *mapInfo);
+            mapInfo->configPending = false;
+            UpdateMapPlayerCounts(map, *mapInfo);
+            if (mapInfo->enabled)
+                needsRescale = true;
+            else
+                needsRestore = true;
+        }
+
+        mapInfo->maintenanceTimer += diff;
+        if (mapInfo->maintenanceTimer >= 5000)
+        {
+            mapInfo->maintenanceTimer = 0;
+            PerformMapMaintenance(map, *mapInfo);
+        }
     }
 
-    UpdateMapPlayerCounts(map, *mapInfo);
-    if (enabled)
+    if (needsRescale)
         RescaleMapCreatures(map);
-    else
+    else if (needsRestore)
         RestoreMapCreatures(map);
 }
 
@@ -899,6 +1042,7 @@ void AutoBalanceManager::OnUnitExitCombat(Unit* unit)
     }
 
     bool shouldRescale = false;
+    bool shouldRestore = false;
     bool lockWasTripped = false;
     {
         std::lock_guard<std::recursive_mutex> guard(mapInfo->stateLock);
@@ -907,10 +1051,13 @@ void AutoBalanceManager::OnUnitExitCombat(Unit* unit)
 
         lockWasTripped = mapInfo->combatLockTripped;
         shouldRescale = mapInfo->combatLockTripped || mapInfo->pendingRescale;
+        shouldRestore = mapInfo->pendingRestore;
+
         mapInfo->combatLocked = false;
         mapInfo->combatLockMinPlayers = 0;
         mapInfo->combatLockTripped = false;
         mapInfo->pendingRescale = false;
+        mapInfo->pendingRestore = false;
         UpdateMapPlayerCounts(map, *mapInfo);
 
         if (lockWasTripped && sABConfig.IsDebugLoggingEnabled())
@@ -922,6 +1069,8 @@ void AutoBalanceManager::OnUnitExitCombat(Unit* unit)
 
     if (shouldRescale)
         RescaleMapCreatures(map);
+    if (shouldRestore)
+        RestoreMapCreatures(map);
 
     if (lockWasTripped && sABConfig.IsPlayerChangeNotifyEnabled())
     {
@@ -931,7 +1080,7 @@ void AutoBalanceManager::OnUnitExitCombat(Unit* unit)
             if (!player || (player->GetSession() && player->GetSession()->IsHeadless()))
                 continue;
 
-            LocaleConstant loc = player->GetSession() ? player->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
+            LocaleConstant const loc = player->GetSession() ? player->GetSession()->GetSessionDbcLocale() : LOCALE_enUS;
             std::string const msg = ABGetLocaleText(loc, "leaving_instance_combat_change");
             ChatHandler(player).SendSysMessage(msg.c_str());
         }

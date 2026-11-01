@@ -12,100 +12,50 @@ Vanilla 1.12.1 port of the AzerothCore **mod-autobalance** module, adapted for *
 
 ### Key Highlights
 - **Non-Intrusive Integration**: Zero core modifications or source code patches required for `tortoise-wow` or `TortoiseBots`. All hooks use native virtual script hooks (`UnitScript`, `PlayerScript`, `AllMapScript`).
+- **Clean Installation & Zero Database Mitigation**: Pure in-memory operational model without database migrations, historical SQL tables, or schema repair.
+- **Boot Native Capacity Baseline**: Captures authentic map capacities once at boot before modifying entrance limits; cleanly releases overrides if disabled.
+- **Instance State Isolation**: 64-bit packed keys `(mapId << 32) | instanceId` paired with object GUIDs isolate creature state across all dungeon instances.
+- **Separate Summons Lifecycle**: Temporary summons are tracked independently to prevent skewing native level averages while fully participating in scaling and cleanup.
 - **Smooth Hyperbolic Tangent (tanh) Scaling**: Smooth sigmoid curves parameterized by inflection points, floor, ceiling, and boss modifiers (1:1 parity with upstream WotLK).
-- **Dynamic & Fixed Level Scaling**: Scales creature levels, health, mana, and damage relative to the highest player level in the party.
-- **Multi-Wing Distance Proximity**: Distance-checked creature activation for multi-wing dungeons such as Scarlet Monastery (Map 189).
-- **Summons & Clones Hierarchy**: Full boss summon, temporary summon unwrapping, and trigger NPC filtering.
-- **Separate Boss Tuning**: Custom modifiers and curves for dungeon bosses vs trash mobs.
-- **Combat Locking**: Prevents player count exploits during active boss encounters.
-- **Reward Scaling**: Configurable XP and money drop scaling based on effective group size with native money loot hooks.
+- **Dynamic & Fixed Level Scaling**: Scales creature levels, health, mana, and damage relative to the highest player level in the party, supporting native boss curves through level 63.
+- **Native Armor Recalculation**: Explicitly invokes `creature->UpdateArmor()` upon applying or restoring base armor modifiers.
+- **Combat Safety & Deferred Work**: Protects active encounters with combat locking and safely defers pending rescale/restore operations until combat concludes.
+- **Selective Hook Subscriptions**: Registers only implemented hook selectors, ensuring zero overhead on unhandled core events.
 - **PlayerBots (`TortoiseBots`) Compatibility**: Configurable bot difficulty weighting (`AutoBalance.CountBots`, `AutoBalance.BotWeight`) and automatic suppression of chat sysmessages to headless bot sessions.
-- **High-Performance Concurrency**: Reader-writer `std::shared_mutex` for hot combat paths and $O(1)$ amortized lazy timestamp-based creature rescaling.
-- **Cross-Platform**: Fully compatible with Linux (Ubuntu 22.04 / 24.04 LTS) and Windows.
 
 ---
 
 ## 2. Installation
 
-The module integrates cleanly without requiring core modifications or source code patches.
+From your core source root:
 
-### 2.1 Clone or Link the Module
-
-Place the module inside the `modules` directory of your TortoiseWoW tree:
-
-```bash
-cd /path/to/tortoise-wow/modules
-git clone https://github.com/Ildourol/mod-twow-autobalance.git mod-twow-autobalance
+```sh
+git clone https://github.com/Ildourol/mod-twow-autobalance.git modules/mod-twow-autobalance
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DMODULE_MOD_TWOW_AUTOBALANCE=static \
+  -DCMAKE_INSTALL_PREFIX=/opt/tortoise
+cmake --build build --parallel
+cmake --install build
 ```
 
-Your source tree structure:
+Re-run CMake after adding the module so its config filename is registered in the build system. Deploy the compiled binary, not only the source folder.
+
+### Configuration
+
+For an active main config located at `/opt/tortoise/etc/mangosd.conf`, copy the distributed configuration template to:
 
 ```text
-tortoise-wow/
-├── modules/
-│   └── mod-twow-autobalance/
-│       ├── conf/
-│       │   └── mod-twow-autobalance.conf.dist
-│       ├── data/
-│       │   └── sql/world/
-│       ├── src/
-│       ├── mod-twow-autobalance.cmake
-│       ├── mod-twow-autobalance.jpg
-│       └── README.md
+/opt/tortoise/etc/modules/mod-twow-autobalance.conf
 ```
 
-### 2.2 Configure the Module
-
-Copy the distributed configuration template:
-
-```bash
-cp modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf.dist \
-   modules/mod-twow-autobalance/conf/mod-twow-autobalance.conf
-```
-
-Enable the module in `mod-twow-autobalance.conf`:
+Its settings include:
 
 ```ini
+[AutoBalance]
 AutoBalance.Enable.Global = 1
 ```
 
-### 2.3 Configure and Build TortoiseWoW
-
-**Linux / Ubuntu 22.04 & 24.04 LTS:**
-
-```bash
-# Install dependencies
-sudo apt update && sudo apt install -y build-essential cmake git libace-dev libmysqlclient-dev libssl-dev libbz2-dev zlib1g-dev
-
-cd /path/to/tortoise-wow
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DMODULE_MOD_TWOW_AUTOBALANCE=static
-cmake --build . --target mangosd -j$(nproc)
-```
-
-**Windows (Visual Studio 2022):**
-
-```powershell
-cd C:\path\to\tortoise-wow
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMODULE_MOD_TWOW_AUTOBALANCE=static
-cmake --build build --config Release --target mangosd --parallel
-```
-
-### 2.4 Verify the Installation
-
-After starting `mangosd`, use:
-
-```text
-.ab info
-```
-
-or:
-
-```text
-.autobalance info
-```
-
-to verify that `mod-twow-autobalance` is loaded and active.
+The runtime directory follows the active main config, including any `-c` command-line overrides. Editing the source checkout's `.conf` or `.conf.dist` does not update the active runtime file. No SQL import is part of installation.
 
 ---
 
@@ -118,7 +68,7 @@ Let:
 - $P_{\text{eff}}$ be the adjusted effective player count in the instance.
 - $I_f$ be the configured inflection factor (default: 0.5).
 - $I = N_{\text{max}} \times I_f$ be the resulting player-count inflection point.
-- $F$ be the curve floor (default: 0.0).
+- $F$ be the curve floor.
 - $C$ be the curve ceiling (default: 1.0).
 
 $$\text{diff} = \frac{N_{\text{max}}}{5.0} \times 1.5$$
@@ -139,11 +89,11 @@ Each creature stat (Health, Mana, Armor, Damage, CC Duration) is computed from i
 
 | Component | Role | Hook Technique |
 |---|---|---|
-| `AutoBalance.h` | Core data models & structs | Shared structs, memory-safe lifetime |
-| `AutoBalanceConfig` | Configuration parser | Supports whitespace & legacy colon delimiters, `-1` inheritance |
-| `AutoBalanceScaling` | Mathematical scaling engine | Sigmoid inflection, level calculations, summons & distance checks |
-| `AutoBalanceManager` | Central state registry | `std::shared_mutex` concurrency, $O(1)$ lazy rescaling |
-| `AutoBalanceScripts` | Engine integration | `UnitScript::OnUnitUpdate` (lazy registration), `PlayerScript::OnMoneyChanged`, `AllMapScript` |
+| `AutoBalance.h` | Core data models & structs | Instance-aware keys `(mapId << 32) | instanceId`, separate summons tracking |
+| `AutoBalanceConfig` | Configuration parser | Native `sConfig` reader, whitespace format, structural size guards |
+| `AutoBalanceScaling` | Mathematical scaling engine | Sigmoid inflection, immutable built-in Vanilla curves (lvl 1-63), `UpdateArmor()` |
+| `AutoBalanceManager` | Central state registry | Instance isolation, boot capacity capture, 5-second maintenance cadence |
+| `AutoBalanceScripts` | Engine integration | Filtered `UnitScript`, `PlayerScript`, `AllMapScript`, and `WorldScript` hooks |
 | `AutoBalanceCommands` | GM commands | `.ab` / `.autobalance` subcommands |
 
 ---
@@ -155,8 +105,8 @@ All commands can be invoked via `.ab` or `.autobalance`:
 - `.ab mapstat` / `.ab map`: Displays diagnostic statistics for the current instance (player counts, min players, combat lock status, level range, active creatures).
 - `.ab creaturestat` / `.ab creature`: Displays detailed multiplier and base/scaled stats for the currently targeted creature.
 - `.ab getoffset`: Displays the active player-count difficulty offset.
-- `.ab setoffset <-N .. +N>`: Adjusts difficulty offset on the fly and rescales live instances (Gamemaster only).
-- `.ab reload`: Reloads `mod-twow-autobalance.conf` without restarting the server (Administrator only).
+- `.ab setoffset <-N .. +N>`: Adjusts global difficulty offset on the fly and schedules refreshes for all tracked instances (Developer security rank `SEC_DEVELOPER` or console).
+- `.ab reload`: Requests native full configuration reload without restarting the server (Administrator rank `SEC_ADMINISTRATOR` or console).
 - `.ab info`: Displays module status and active feature toggles.
 
 ---
@@ -173,3 +123,4 @@ When running with `TortoiseBots`:
 ## 7. Credits
 
 - Based on the original AzerothCore `mod-autobalance` module by **VAS**, **CVMagic**, and the **AzerothCore Community**.
+- Adapted for TortoiseWoW / Turtle WoW (Vanilla 1.12.1 / client 1.18.1.7272).

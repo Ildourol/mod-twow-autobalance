@@ -15,6 +15,7 @@
 #include "SharedDefines.h"
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <set>
@@ -26,6 +27,7 @@
 
 class Creature;
 class Player;
+class Map;
 
 enum ScalingMethod
 {
@@ -112,9 +114,34 @@ struct CreatureBaseData
     bool   initialized = false;
 };
 
+struct AutoBalanceCreatureKey
+{
+    uint64 instanceKey = 0;
+    ObjectGuid guid;
+
+    bool operator==(AutoBalanceCreatureKey const& other) const
+    {
+        return instanceKey == other.instanceKey && guid == other.guid;
+    }
+};
+
+struct AutoBalanceCreatureKeyHash
+{
+    size_t operator()(AutoBalanceCreatureKey const& k) const noexcept
+    {
+        size_t const h1 = std::hash<uint64>{}(k.instanceKey);
+        size_t const h2 = std::hash<uint64>{}(k.guid.GetRawValue());
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+    }
+};
+
 struct AutoBalanceCreatureInfo
 {
     mutable std::recursive_mutex stateLock;
+
+    uint64     instanceKey            = 0;
+    uint32     entry                  = 0;
+    bool       isTemporarySummon      = false;
 
     uint64_t   mapConfigTime          = 1;
     uint32     instancePlayerCount    = 0;
@@ -144,16 +171,13 @@ struct AutoBalanceCreatureInfo
     bool       isInCreatureList       = false;
     Relevance  relevance              = AUTOBALANCE_RELEVANCE_UNCHECKED;
 
-    Creature*   summoner              = nullptr;
-    std::string summonerName;
-    uint8       summonerLevel         = 0;
-
     CreatureBaseData baseData;
 };
 
 struct AutoBalanceMapInfo
 {
     mutable std::recursive_mutex stateLock;
+    uint64     instanceKey                    = 0;
     bool       enabled                        = false;
     uint64_t   globalConfigTime               = 1;
     uint64_t   mapConfigTime                  = 1;
@@ -178,6 +202,9 @@ struct AutoBalanceMapInfo
     bool       combatLocked                   = false;
     bool       combatLockTripped              = false;
     bool       pendingRescale                 = false;
+    bool       pendingRestore                 = false;
+    bool       playerUnlinkPending            = false;
+    uint32     maintenanceTimer               = 0;
     uint8      combatLockMinPlayers           = 0;
 
     bool       isLevelScalingEnabled          = true;
@@ -191,7 +218,13 @@ struct AutoBalanceMapInfo
 
     std::set<ObjectGuid> players;
     std::set<ObjectGuid> creatures;
+    std::set<ObjectGuid> summons;
 };
+
+inline uint64 MakeAutoBalanceInstanceKey(uint32 mapId, uint32 instanceId)
+{
+    return (static_cast<uint64>(mapId) << 32) | static_cast<uint64>(instanceId);
+}
 
 inline uint64_t GetCurrentAutoBalanceConfigTime()
 {
